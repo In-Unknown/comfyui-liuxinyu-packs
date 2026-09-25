@@ -183,8 +183,16 @@ class SaveImageToAbsolutePath:
         path = Path(folder) / filename
         if not path.suffix:
             raise ValueError("filename must include a file extension, e.g. test.png")
-        if path.exists() and not overwrite:
-            raise FileExistsError(f"File already exists: {path}")
+        if not overwrite and path.exists():
+            stem = path.stem
+            suffix = path.suffix
+            counter = 1
+            while True:
+                candidate = path.with_name(f"{stem}_{counter}{suffix}")
+                if not candidate.exists():
+                    path = candidate
+                    break
+                counter += 1
         path.parent.mkdir(parents=True, exist_ok=True)
 
         # Save only the first image in the current batch.

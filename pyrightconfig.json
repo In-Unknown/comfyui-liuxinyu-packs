@@ -1,0 +1,6 @@
+{
+    "extraPaths": [
+        "c:/Apps/ComfyUI_windows_portable_nvidia/ComfyUI_windows_portable/ComfyUI"
+    ],
+    "pythonPath": "c:/Apps/ComfyUI_windows_portable_nvidia/ComfyUI_windows_portable/python_embeded/python.exe"
+}
