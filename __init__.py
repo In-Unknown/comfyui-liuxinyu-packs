@@ -157,16 +157,36 @@ class SaveImageToAbsolutePath:
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {
-            "image": ("IMAGE", {"display_name": "图片", "tooltip": "要保存的图像。"}),
-            "folder": ("STRING", {"default": r"D:\\AI\\outputs", "multiline": False, "display_name": "文件夹", "tooltip": "保存文件的绝对路径。"}),
-            "filename": ("STRING", {"default": "test.png", "multiline": False, "display_name": "文件名", "tooltip": "要保存的文件名。"}),
-            "overwrite": ("BOOLEAN", {"default": True, "display_name": "覆盖已有文件", "tooltip": "文件已存在时是否覆盖。"}),
+            "image": ("IMAGE", {"display_name": "图片", "tooltip": "要保存的输入图像。支持批次传入：当批次数量为 1 时保存为单个文件；当批次数量大于 1 时，自动创建与文件名同名的子文件夹，将批次中的每张图片按序号依次保存到其中。"}),
+            "folder": ("STRING", {"default": r"D:\\AI\\outputs", "multiline": False, "display_name": "文件夹", "tooltip": "保存文件的绝对路径。必须为绝对路径，不能为空。可点击下方的「选择文件夹」按钮调用系统原生对话框进行选择。"}),
+            "filename": ("STRING", {"default": "test.png", "multiline": False, "display_name": "文件名", "tooltip": "要保存的文件名，需包含扩展名（支持 .png / .jpg / .jpeg / .webp / .bmp）。仅接受纯文件名，不能包含路径分隔符。当批次大于 1 时，此名称同时用作子文件夹名，文件夹内的每张图片以「文件名-序号.扩展名」格式命名，序号前导零位数由批次数量决定。"}),
+            "overwrite": ("BOOLEAN", {"default": True, "display_name": "覆盖已有文件", "tooltip": "为 True 时直接覆盖同名文件或文件夹。为 False 时启用自动编号：若保存单张图片且目标文件已存在，则在文件名后追加 _1、_2… 后缀，从小到大找到第一个不存在的名称；若保存批次图片且同名文件夹已存在，则对文件夹名追加 _1、_2… 后缀。文件与文件夹的冲突也会被检测，不会出现同名文件与文件夹并存的情况。"}),
         }}
 
     RETURN_TYPES = ()
     FUNCTION = "save"
     OUTPUT_NODE = True
     CATEGORY = "image"
+    DESCRIPTION = "SaveImageToAbsolutePath 节点将图像保存到指定的绝对路径。支持单张图片和批次图片保存：单张图片直接保存为文件；批次图片自动创建与文件名同名的子文件夹，将批次中的每张图片按序号依次保存。覆盖关闭时自动追加编号避免重名。"
+
+    @staticmethod
+    def _to_pil(image_tensor, ext):
+        pixels = np.clip(image_tensor.detach().cpu().numpy() * 255.0, 0, 255).astype(np.uint8)
+        img = Image.fromarray(pixels)
+        if ext in {".jpg", ".jpeg"} and img.mode != "RGB":
+            img = img.convert("RGB")
+        return img
+
+    @staticmethod
+    def _save_image(img, path, ext):
+        if ext in {".jpg", ".jpeg"}:
+            img.save(path, format="JPEG", quality=95)
+        elif ext == ".webp":
+            img.save(path, format="WEBP", quality=95)
+        elif ext == ".bmp":
+            img.save(path, format="BMP")
+        else:
+            img.save(path, format="PNG")
 
     def save(self, image, folder, filename, overwrite=True):
         folder = os.path.normpath(folder.strip())
@@ -180,52 +200,80 @@ class SaveImageToAbsolutePath:
         fp = Path(filename)
         if fp.is_absolute() or fp.name != filename:
             raise ValueError("filename must contain only a file name")
-        path = Path(folder) / filename
-        if not path.suffix:
+        if not fp.suffix:
             raise ValueError("filename must include a file extension, e.g. test.png")
-        if not overwrite and path.exists():
-            stem = path.stem
-            suffix = path.suffix
-            counter = 1
-            while True:
-                candidate = path.with_name(f"{stem}_{counter}{suffix}")
-                if not candidate.exists():
-                    path = candidate
-                    break
-                counter += 1
-        path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Save only the first image in the current batch.
-        pixels = np.clip(image[0].detach().cpu().numpy() * 255.0, 0, 255).astype(np.uint8)
-        img = Image.fromarray(pixels)
-        ext = path.suffix.lower()
-        if ext in {".jpg", ".jpeg"}:
-            if img.mode != "RGB":
-                img = img.convert("RGB")
-            img.save(path, format="JPEG", quality=95)
-        elif ext == ".webp":
-            img.save(path, format="WEBP", quality=95)
-        elif ext == ".bmp":
-            img.save(path, format="BMP")
-        else:
-            img.save(path, format="PNG")
+        stem = fp.stem
+        suffix = fp.suffix
+        ext = suffix.lower()
+        batch_size = image.shape[0]
 
-        # Create a ComfyUI-managed preview copy so the frontend can display
-        # the rendered image in the node, just like the built-in Save Image node.
         preview_dir = Path(folder_paths.get_temp_directory())
         preview_dir.mkdir(parents=True, exist_ok=True)
-        preview_name = f"SaveImageToAbsolutePath_{os.getpid()}_{id(image)}.png"
-        preview_path = preview_dir / preview_name
-        img.save(preview_path, format="PNG")
+
+        if batch_size == 1:
+            path = Path(folder) / filename
+            if not overwrite and (path.exists() or (Path(folder) / stem).exists()):
+                counter = 1
+                while True:
+                    candidate = path.with_name(f"{stem}_{counter}{suffix}")
+                    candidate_folder = Path(folder) / f"{stem}_{counter}"
+                    if not candidate.exists() and not candidate_folder.exists():
+                        path = candidate
+                        break
+                    counter += 1
+            path.parent.mkdir(parents=True, exist_ok=True)
+
+            img = self._to_pil(image[0], ext)
+            self._save_image(img, path, ext)
+
+            preview_name = f"SaveImageToAbsolutePath_{os.getpid()}_{id(image)}.png"
+            img.save(preview_dir / preview_name, format="PNG")
+
+            return {
+                "ui": {
+                    "images": [{
+                        "filename": preview_name,
+                        "subfolder": "",
+                        "type": "temp",
+                    }],
+                    "text": [f"已保存：{path}"],
+                }
+            }
+
+        # Batch: save into a subfolder named after the stem.
+        digits = len(str(batch_size))
+        subfolder = Path(folder) / stem
+        if not overwrite and (subfolder.exists() or (Path(folder) / f"{stem}{suffix}").exists()):
+            counter = 1
+            while True:
+                candidate_name = f"{stem}_{counter}"
+                candidate = Path(folder) / candidate_name
+                if not candidate.exists() and not (Path(folder) / f"{candidate_name}{suffix}").exists():
+                    subfolder = candidate
+                    stem = candidate_name
+                    break
+                counter += 1
+        subfolder.mkdir(parents=True, exist_ok=True)
+
+        ui_images = []
+        for i in range(batch_size):
+            file_path = subfolder / f"{stem}-{str(i + 1).zfill(digits)}{suffix}"
+            img = self._to_pil(image[i], ext)
+            self._save_image(img, file_path, ext)
+
+            preview_name = f"SaveImageToAbsolutePath_{os.getpid()}_{id(image)}_{i}.png"
+            img.save(preview_dir / preview_name, format="PNG")
+            ui_images.append({
+                "filename": preview_name,
+                "subfolder": "",
+                "type": "temp",
+            })
 
         return {
             "ui": {
-                "images": [{
-                    "filename": preview_name,
-                    "subfolder": "",
-                    "type": "temp",
-                }],
-                "text": [f"已保存：{path}"],
+                "images": ui_images,
+                "text": [f"已保存 {batch_size} 张图片到：{subfolder}"],
             }
         }
 
