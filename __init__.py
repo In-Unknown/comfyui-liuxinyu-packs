@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 import numpy as np
+import torch
 from PIL import Image
 import folder_paths
 
@@ -134,6 +135,118 @@ if os.name == "nt":
             if old_dpi_context:
                 set_thread_dpi(old_dpi_context)
 
+    def _pick_file_native(default_path=""):
+        default_path = os.path.normpath(default_path.strip()) if default_path else ""
+        ole32 = ctypes.windll.ole32
+        shell32 = ctypes.windll.shell32
+        user32 = ctypes.windll.user32
+
+        dpi_context = ctypes.c_void_p(-4)
+        set_thread_dpi = user32.SetThreadDpiAwarenessContext
+        set_thread_dpi.argtypes = [ctypes.c_void_p]
+        set_thread_dpi.restype = ctypes.c_void_p
+        old_dpi_context = set_thread_dpi(dpi_context)
+
+        hr = ole32.CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+        com_initialized = hr in (0, 1)
+        if hr not in (0, 1, 0x80010106):
+            raise OSError(f"CoInitializeEx failed: 0x{hr & 0xffffffff:08X}")
+
+        dialog = ctypes.c_void_p()
+        try:
+            hr = ole32.CoCreateInstance(
+                ctypes.byref(_guid(CLSID_FileOpenDialog)),
+                None,
+                1,
+                ctypes.byref(_guid(IID_IFileOpenDialog)),
+                ctypes.byref(dialog),
+            )
+            if hr < 0:
+                raise OSError(f"CoCreateInstance failed: 0x{hr & 0xffffffff:08X}")
+
+            options = ctypes.c_uint32()
+            hr = _com_method(dialog, 10, ctypes.c_long, ctypes.POINTER(ctypes.c_uint32))(dialog, ctypes.byref(options))
+            if hr < 0:
+                raise OSError(f"GetOptions failed: 0x{hr & 0xffffffff:08X}")
+            options.value |= FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST
+            hr = _com_method(dialog, 9, ctypes.c_long, ctypes.c_uint32)(dialog, options.value)
+            if hr < 0:
+                raise OSError(f"SetOptions failed: 0x{hr & 0xffffffff:08X}")
+
+            title = ctypes.c_wchar_p("选择文件")
+            _com_method(dialog, 17, ctypes.c_long, ctypes.c_wchar_p)(dialog, title)
+
+            if default_path and os.path.isfile(default_path):
+                pidl = ctypes.c_void_p()
+                shell32.SHParseDisplayName.argtypes = [
+                    ctypes.c_wchar_p,
+                    ctypes.c_void_p,
+                    ctypes.POINTER(ctypes.c_void_p),
+                    ctypes.c_ulong,
+                    ctypes.POINTER(ctypes.c_ulong),
+                ]
+                shell32.SHParseDisplayName.restype = ctypes.c_long
+                attrs = ctypes.c_ulong()
+                hr = shell32.SHParseDisplayName(
+                    ctypes.c_wchar_p(default_path),
+                    None,
+                    ctypes.byref(pidl),
+                    0,
+                    ctypes.byref(attrs),
+                )
+                if hr >= 0 and pidl:
+                    try:
+                        shell_item = ctypes.c_void_p()
+                        iid_shell_item = _guid(IID_IShellItem)
+                        shell32.SHCreateItemFromParsingName.argtypes = [
+                            ctypes.c_wchar_p,
+                            ctypes.c_void_p,
+                            ctypes.POINTER(GUID),
+                            ctypes.POINTER(ctypes.c_void_p),
+                        ]
+                        shell32.SHCreateItemFromParsingName.restype = ctypes.c_long
+                        hr = shell32.SHCreateItemFromParsingName(
+                            ctypes.c_wchar_p(os.path.dirname(default_path)),
+                            None,
+                            ctypes.byref(iid_shell_item),
+                            ctypes.byref(shell_item),
+                        )
+                        if hr >= 0 and shell_item:
+                            try:
+                                _com_method(dialog, 12, ctypes.c_long, ctypes.c_void_p)(dialog, shell_item)
+                            finally:
+                                _release(shell_item)
+                    finally:
+                        ole32.CoTaskMemFree(pidl)
+
+            owner = user32.GetForegroundWindow()
+            hr = _com_method(dialog, 3, ctypes.c_long, wintypes.HWND)(dialog, owner)
+            if hr == 0x800704C7:
+                return None
+            if hr < 0:
+                raise OSError(f"File dialog failed: 0x{hr & 0xffffffff:08X}")
+
+            shell_item = ctypes.c_void_p()
+            hr = _com_method(dialog, 20, ctypes.c_long, ctypes.POINTER(ctypes.c_void_p))(dialog, ctypes.byref(shell_item))
+            if hr < 0:
+                raise OSError(f"GetResult failed: 0x{hr & 0xffffffff:08X}")
+            try:
+                path_ptr = ctypes.c_wchar_p()
+                hr = _com_method(shell_item, 5, ctypes.c_long, ctypes.c_uint32, ctypes.POINTER(ctypes.c_wchar_p))(shell_item, SIGDN_FILESYSPATH, ctypes.byref(path_ptr))
+                if hr < 0 or not path_ptr.value:
+                    raise OSError(f"GetDisplayName failed: 0x{hr & 0xffffffff:08X}")
+                result = path_ptr.value
+                ole32.CoTaskMemFree(path_ptr)
+                return result
+            finally:
+                _release(shell_item)
+        finally:
+            _release(dialog)
+            if com_initialized:
+                ole32.CoUninitialize()
+            if old_dpi_context:
+                set_thread_dpi(old_dpi_context)
+
     def _guid(value):
         guid = GUID()
         ole32 = ctypes.windll.ole32
@@ -150,7 +263,16 @@ if os.name == "nt":
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)
 
+    async def _select_file(request):
+        try:
+            current_path = request.query.get("path", "")
+            file_path = await asyncio.to_thread(_pick_file_native, current_path)
+            return web.json_response({"path": file_path})
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+
     PromptServer.instance.routes.get("/save_image_to_path/select_folder")(_select_folder)
+    PromptServer.instance.routes.get("/save_image_to_path/select_file")(_select_file)
 
 
 class SaveImageToAbsolutePath:
@@ -278,6 +400,111 @@ class SaveImageToAbsolutePath:
         }
 
 
-NODE_CLASS_MAPPINGS = {"SaveImageToAbsolutePath": SaveImageToAbsolutePath}
-NODE_DISPLAY_NAME_MAPPINGS = {"SaveImageToAbsolutePath": "保存图像到绝对路径"}
+class LoadImageFromPath:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "path": ("STRING", {"default": "", "multiline": False, "display_name": "文件路径", "tooltip": "要加载的图片文件的绝对路径。支持 .png / .jpg / .jpeg / .webp / .bmp 等格式。"}),
+        }}
+
+    RETURN_TYPES = ("IMAGE", "INT", "INT")
+    RETURN_NAMES = ("图片", "宽度", "高度")
+    FUNCTION = "execute"
+    OUTPUT_NODE = True
+    CATEGORY = "image"
+    DESCRIPTION = "LoadImageFromPath 节点从指定的绝对路径加载图片文件，输出为 IMAGE 类型及图片的宽度和高度。节点上会显示已加载图片的预览。"
+
+    def execute(self, path):
+        path = path.strip()
+        if not path or not os.path.isfile(path):
+            raise ValueError(f"文件不存在：{path}")
+
+        from PIL import ImageOps
+        img = Image.open(path)
+        if img is None:
+            raise ValueError(f"无法加载图片：{path}")
+        img = ImageOps.exif_transpose(img)
+        if img is None:
+            raise ValueError(f"无法处理图片EXIF：{path}")
+        img = img.convert("RGB")
+        w, h = img.size
+        image = np.array(img).astype(np.float32) / 255.0
+        image = torch.from_numpy(image)[None,]
+
+        preview_dir = Path(folder_paths.get_temp_directory())
+        preview_dir.mkdir(parents=True, exist_ok=True)
+        preview_name = f"LoadImageFromPath_{os.getpid()}_{hash(path)}.png"
+        preview_path = preview_dir / preview_name
+        img.save(preview_path, format="PNG")
+
+        return {
+            "result": (image, w, h),
+            "ui": {
+                "images": [{
+                    "filename": preview_name,
+                    "subfolder": "",
+                    "type": "temp",
+                }],
+            },
+        }
+
+
+class LoadPath:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "path": ("STRING", {"default": "", "multiline": False, "display_name": "文件路径", "tooltip": "文件的绝对路径。可点击下方的「选择文件」按钮调用系统原生对话框进行选择，也可手动输入。"}),
+        }}
+
+    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING")
+    RETURN_NAMES = ("完整路径", "文件名", "无后缀文件名", "后缀")
+    FUNCTION = "execute"
+    OUTPUT_NODE = True
+    CATEGORY = "image"
+    DESCRIPTION = "LoadPath 节点通过系统原生文件选择对话框选取文件路径，输出完整路径、文件名（含扩展名）、无后缀文件名和后缀。若文件为图片则显示预览。可手动输入或通过按钮选择文件。"
+
+    _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tiff"}
+
+    def execute(self, path):
+        path = path.strip()
+        filename = os.path.basename(path) if path else ""
+        if "." in filename:
+            stem, ext = filename.rsplit(".", 1)
+        else:
+            stem, ext = filename, ""
+
+        ui = {}
+        if path and os.path.isfile(path) and f".{ext.lower()}" in self._IMAGE_EXTS:
+            try:
+                from PIL import ImageOps
+                img = Image.open(path)
+                if img is not None:
+                    img = ImageOps.exif_transpose(img)
+                    if img is not None:
+                        img = img.convert("RGB")
+                        preview_dir = Path(folder_paths.get_temp_directory())
+                        preview_dir.mkdir(parents=True, exist_ok=True)
+                        preview_name = f"LoadPath_{os.getpid()}_{hash(path)}.png"
+                        img.save(preview_dir / preview_name, format="PNG")
+                        ui["images"] = [{
+                            "filename": preview_name,
+                            "subfolder": "",
+                            "type": "temp",
+                        }]
+            except Exception:
+                pass
+
+        return {"result": (path, filename, stem, ext), "ui": ui}
+
+
+NODE_CLASS_MAPPINGS = {
+    "SaveImageToAbsolutePath": SaveImageToAbsolutePath,
+    "LoadPath": LoadPath,
+    "LoadImageFromPath": LoadImageFromPath,
+}
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "SaveImageToAbsolutePath": "保存图像到绝对路径",
+    "LoadPath": "加载路径",
+    "LoadImageFromPath": "从路径加载图片",
+}
 WEB_DIRECTORY = "."
