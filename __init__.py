@@ -1,5 +1,6 @@
 import asyncio
 import ctypes
+import importlib.util as _ilu
 import os
 from pathlib import Path
 
@@ -7,6 +8,31 @@ import numpy as np
 import torch
 from PIL import Image
 import folder_paths
+
+
+# Load batch_node.py via importlib so the package works regardless of how
+# ComfyUI registers the custom_node module name (which contains a dash and
+# cannot be imported through a normal relative import).
+_batch_spec = _ilu.spec_from_file_location(
+    "_save_image_to_path_batch_node",
+    os.path.join(os.path.dirname(__file__), "batch_node.py"),
+)
+if _batch_spec is None or _batch_spec.loader is None:
+    raise ImportError("Failed to load batch_node.py spec")
+_batch_module = _ilu.module_from_spec(_batch_spec)
+_batch_spec.loader.exec_module(_batch_module)
+SaveSelectedFromBatch = _batch_module.SaveSelectedFromBatch
+
+# 同理加载 compositing_node.py（遮罩区域图片排列组合，基于核心新版 io 框架）
+_compositing_spec = _ilu.spec_from_file_location(
+    "_save_image_to_path_compositing_node",
+    os.path.join(os.path.dirname(__file__), "compositing_node.py"),
+)
+if _compositing_spec is None or _compositing_spec.loader is None:
+    raise ImportError("Failed to load compositing_node.py spec")
+_compositing_module = _ilu.module_from_spec(_compositing_spec)
+_compositing_spec.loader.exec_module(_compositing_module)
+ImageMaskCombinations = _compositing_module.ImageMaskCombinations
 
 
 if os.name == "nt":
@@ -274,6 +300,22 @@ if os.name == "nt":
     PromptServer.instance.routes.get("/save_image_to_path/select_folder")(_select_folder)
     PromptServer.instance.routes.get("/save_image_to_path/select_file")(_select_file)
 
+    async def _save_selected(request):
+        try:
+            data = await request.json()
+            result = SaveSelectedFromBatch.save_selected_from_temp(
+                data.get("session_id", ""),
+                data.get("indices", []),
+                data.get("folder", ""),
+                data.get("filename", ""),
+            )
+            status = 500 if "error" in result else 200
+            return web.json_response(result, status=status)
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+
+    PromptServer.instance.routes.post("/save_image_to_path/save_selected")(_save_selected)
+
 
 class SaveImageToAbsolutePath:
     @classmethod
@@ -499,12 +541,16 @@ class LoadPath:
 
 NODE_CLASS_MAPPINGS = {
     "SaveImageToAbsolutePath": SaveImageToAbsolutePath,
+    "SaveSelectedFromBatch": SaveSelectedFromBatch,
     "LoadPath": LoadPath,
     "LoadImageFromPath": LoadImageFromPath,
+    "ImageMaskCombinations": ImageMaskCombinations,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "SaveImageToAbsolutePath": "保存图像到绝对路径",
+    "SaveSelectedFromBatch": "从批次中选择保存图片",
     "LoadPath": "加载路径",
     "LoadImageFromPath": "从路径加载图片",
+    "ImageMaskCombinations": "遮罩区域图片排列组合",
 }
 WEB_DIRECTORY = "."

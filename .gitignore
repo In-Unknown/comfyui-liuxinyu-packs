@@ -7,3 +7,5 @@ build/
 .venv/
 venv/
 .env
+.trae/
+pyrightconfig.json
