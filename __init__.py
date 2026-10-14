@@ -4,7 +4,14 @@ import csv
 import io
 import importlib.util as _ilu
 import os
+import atexit
+import threading
+import time
+import uuid
 from pathlib import Path
+
+from aiohttp import web
+from server import PromptServer
 
 import numpy as np
 import torch
@@ -39,8 +46,6 @@ ImageMaskCombinations = _compositing_module.ImageMaskCombinations
 
 if os.name == "nt":
     import ctypes.wintypes as wintypes
-    from aiohttp import web
-    from server import PromptServer
 
     class GUID(ctypes.Structure):
         _fields_ = [("Data1", ctypes.c_ulong), ("Data2", ctypes.c_ushort), ("Data3", ctypes.c_ushort), ("Data4", ctypes.c_ubyte * 8)]
@@ -665,7 +670,7 @@ class LoadPath:
         else:
             stem, ext = filename, ""
 
-        ui = {}
+        ui = {"images": []}
         if path and os.path.isfile(path) and f".{ext.lower()}" in self._IMAGE_EXTS:
             try:
                 from PIL import ImageOps
@@ -687,6 +692,109 @@ class LoadPath:
                 pass
 
         return {"result": (path, filename, stem, ext), "ui": ui}
+
+
+# Only generated thumbnails are served through ComfyUI's existing /view endpoint.
+_PATH_PREVIEW_LIMIT = 64
+_PATH_PREVIEW_SESSIONS = {}
+_PATH_PREVIEW_LOCK = threading.Lock()
+
+
+def _remove_path_preview_files(entry):
+    for file in entry.get("files", []):
+        file.unlink(missing_ok=True)
+    entry["files"] = []
+
+
+def _path_preview(data):
+    from PIL import ImageOps, UnidentifiedImageError
+
+    session = data.get("session", "")
+    revision = data.get("revision")
+    kind = data.get("kind")
+    path = data.get("path", "")
+    if not isinstance(session, str) or len(session) != 32 or any(c not in "0123456789abcdef" for c in session):
+        raise ValueError("无效预览会话。")
+    if type(revision) is not int or revision < 0:
+        raise ValueError("无效预览版本。")
+    if not isinstance(kind, str) or kind not in {"LoadPath", "LoadImageFromPath", "LoadImageBatchFromPath"}:
+        raise ValueError("不支持的预览节点。")
+    if not isinstance(path, str) or len(path) > 65536:
+        raise ValueError("无效或过长的预览路径。")
+
+    # Serialize thumbnail work, bound disk usage, and retain revision tombstones
+    # so a late request cannot recreate files after a node has been removed.
+    with _PATH_PREVIEW_LOCK:
+        now = time.monotonic()
+        for key, entry in list(_PATH_PREVIEW_SESSIONS.items()):
+            if now - entry["time"] > 3600:
+                _remove_path_preview_files(entry)
+                del _PATH_PREVIEW_SESSIONS[key]
+        entry = _PATH_PREVIEW_SESSIONS.get(session)
+        if entry and revision <= entry["revision"]:
+            return {"images": [], "stale": True}
+        if entry is None:
+            if len(_PATH_PREVIEW_SESSIONS) >= 128:
+                oldest = min(_PATH_PREVIEW_SESSIONS, key=lambda key: _PATH_PREVIEW_SESSIONS[key]["time"])
+                _remove_path_preview_files(_PATH_PREVIEW_SESSIONS.pop(oldest))
+            entry = {"files": []}
+            _PATH_PREVIEW_SESSIONS[session] = entry
+        _remove_path_preview_files(entry)
+        entry.update(revision=revision, time=now)
+        if data.get("clear") or not path.strip():
+            return {"images": []}
+        try:
+            paths = (LoadImageBatchFromPath._resolve_paths(path)
+                     if kind == "LoadImageBatchFromPath" else [Path(path.strip())])
+            output = []
+            temp = Path(folder_paths.get_temp_directory())
+            temp.mkdir(parents=True, exist_ok=True)
+            for item in paths[:_PATH_PREVIEW_LIMIT]:
+                try:
+                    with Image.open(item) as source:
+                        # First frame only, as in the batch loader. Reduce before
+                        # EXIF transpose/RGB conversion to avoid full-size copies.
+                        source.thumbnail((512, 512), Image.Resampling.LANCZOS)
+                        with ImageOps.exif_transpose(source) as corrected:
+                            with corrected.convert("RGB") as image:
+                                target = temp / f"path_preview_{uuid.uuid4().hex}.jpg"
+                                entry["files"].append(target)
+                                image.save(target, format="JPEG", quality=85)
+                except UnidentifiedImageError as error:
+                    if kind == "LoadPath":
+                        return {"images": []}
+                    raise ValueError(f"无法加载图片（损坏或不支持）：{item}") from error
+                except (OSError, ValueError) as error:
+                    raise ValueError(f"无法预览图片：{item}：{error}") from error
+                output.append({"filename": target.name, "subfolder": "", "type": "temp"})
+            result = {"images": output, "total": len(paths)}
+            if len(paths) > _PATH_PREVIEW_LIMIT:
+                result["warning"] = f"仅预览前 {_PATH_PREVIEW_LIMIT} 张，共 {len(paths)} 张；工作流仍加载全部图片。"
+            return result
+        except Exception:
+            _remove_path_preview_files(entry)
+            raise
+
+
+async def _preview_path(request):
+    try:
+        data = await request.json()
+        if not isinstance(data, dict):
+            raise ValueError("预览请求必须为 JSON 对象。")
+        return web.json_response(await asyncio.to_thread(_path_preview, data))
+    except (ValueError, OSError) as error:
+        return web.json_response({"error": str(error)}, status=400)
+
+
+def _cleanup_path_previews():
+    with _PATH_PREVIEW_LOCK:
+        for entry in _PATH_PREVIEW_SESSIONS.values():
+            _remove_path_preview_files(entry)
+        _PATH_PREVIEW_SESSIONS.clear()
+
+
+atexit.register(_cleanup_path_previews)
+PromptServer.instance.routes.post("/save_image_to_path/preview_path")(_preview_path)
 
 
 NODE_CLASS_MAPPINGS = {

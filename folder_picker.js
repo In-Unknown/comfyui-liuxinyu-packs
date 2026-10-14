@@ -1,4 +1,5 @@
 import { app } from "../../scripts/app.js";
+import { api } from "../../scripts/api.js";
 
 const SAVE_IMAGE_NODE = "SaveImageToAbsolutePath";
 const LOAD_PATH_NODE = "LoadPath";
@@ -107,14 +108,136 @@ app.registerExtension({
       setupFolderPicker(node);
     } else if (node.comfyClass === "LoadImageBatchFromPath") {
       setupImageBatchPicker(node);
-    } else if (node.comfyClass === LOAD_PATH_NODE) {
+      setupPathPreview(node);
+    } else if (node.comfyClass === LOAD_PATH_NODE || node.comfyClass === "LoadImageFromPath") {
       setupFilePicker(node);
+      setupPathPreview(node);
     } else if (node.comfyClass === BATCH_NODE) {
       setupFolderPicker(node);
       setupBatchSelector(node);
     }
   },
 });
+
+function setupPathPreview(node) {
+  const path = node.widgets?.find((w) => w.name === "path");
+  if (!path || path.__pathPreview) return;
+  path.__pathPreview = true;
+  const session = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
+  let revision = 0;
+  let removed = false;
+  let timer;
+  let controller;
+  let outputKey;
+  let ownedOutput;
+  const pendingImages = new Set();
+  const locator = () => node.graph?.isRootGraph === false ? `${node.graph.id}:${node.id}` : String(node.id);
+  const releaseOutput = () => {
+    if (outputKey && app.nodeOutputs[outputKey] === ownedOutput) delete app.nodeOutputs[outputKey];
+  };
+  const clear = () => {
+    releaseOutput();
+    node.imgs = [];
+    node.images = [];
+    if (!removed && node.graph) {
+      outputKey = locator();
+      ownedOutput = { images: node.images };
+      app.nodeOutputs = { ...app.nodeOutputs, [outputKey]: ownedOutput };
+    }
+    node.imageIndex = null;
+    const index = node.widgets.findIndex((w) => w.name === "$$canvas-image-preview");
+    if (index !== -1) {
+      node.widgets[index].onRemove?.();
+      node.widgets.splice(index, 1);
+    }
+    node.setDirtyCanvas(true, true);
+  };
+  const notify = (message, severity = "error") => {
+    app.extensionManager?.toast?.add({ severity, summary: "路径预览", detail: message, life: 6000 });
+    console.warn(`[SaveImageToPath] ${message}`);
+  };
+  const request = (value, version, options = {}) => api.fetchApi("/save_image_to_path/preview_path", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session, revision: version, kind: node.comfyClass, path: value, clear: removed }),
+    ...options,
+  });
+  const loadImage = (meta) => new Promise((resolve, reject) => {
+    const image = new Image();
+    const cancel = () => { image.src = ""; finish(new Error("预览已取消")); };
+    const timeout = setTimeout(() => finish(new Error("预览图片加载超时")), 15000);
+    const finish = (error) => {
+      clearTimeout(timeout);
+      pendingImages.delete(cancel);
+      image.onload = image.onerror = null;
+      if (error) reject(error); else resolve(image);
+    };
+    pendingImages.add(cancel);
+    image.onload = () => finish();
+    image.onerror = () => finish(new Error("无法加载临时预览图片"));
+    image.src = api.apiURL(`/view?${new URLSearchParams(meta)}`);
+  });
+  const refresh = () => {
+    if (removed) return;
+    const version = ++revision;
+    const value = String(path.value ?? "");
+    clearTimeout(timer);
+    controller?.abort();
+    for (const cancel of pendingImages) cancel();
+    clear();
+    timer = setTimeout(async () => {
+      controller = new AbortController();
+      try {
+        const response = await request(value, version, { signal: controller.signal });
+        const data = await response.json();
+        if (removed || version !== revision) return;
+        if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
+        if (data.stale) return;
+        const metas = data.images || [];
+        const images = await Promise.all(metas.map(loadImage));
+        if (removed || version !== revision || String(path.value ?? "") !== value) return;
+        // The official draw handler creates its native ImagePreviewWidget from
+        // imgs. Preload with a revision guard: core's async loader has no guard.
+        ownedOutput = { images: metas };
+        outputKey = locator();
+        node.images = metas;
+        node.imgs = images;
+        node.imageIndex = null;
+        node.previewMediaType = "image";
+        node.animatedImages = false;
+        app.nodeOutputs = { ...app.nodeOutputs, [outputKey]: ownedOutput };
+        node.setDirtyCanvas(true, true);
+        if (data.warning) notify(data.warning, "warn");
+      } catch (error) {
+        if (removed || version !== revision || error.name === "AbortError") return;
+        clear();
+        notify(error.message);
+      }
+    }, 180);
+  };
+  const callback = path.callback;
+  path.callback = function (...args) {
+    try { return callback?.apply(this, args); } finally { refresh(); }
+  };
+  const configure = node.onConfigure;
+  node.onConfigure = function (...args) {
+    const result = configure?.apply(this, args);
+    refresh();
+    return result;
+  };
+  const onRemoved = node.onRemoved;
+  node.onRemoved = function (...args) {
+    removed = true;
+    ++revision;
+    clearTimeout(timer);
+    controller?.abort();
+    for (const cancel of pendingImages) cancel();
+    clear();
+    void request("", revision, { keepalive: true }).catch(() => {});
+    return onRemoved?.apply(this, args);
+  };
+  refresh();
+}
 
 function setupFolderPicker(node) {
   const folder = node.widgets?.find((w) => w.name === "folder");
