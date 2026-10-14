@@ -105,6 +105,8 @@ app.registerExtension({
   async nodeCreated(node) {
     if (node.comfyClass === SAVE_IMAGE_NODE) {
       setupFolderPicker(node);
+    } else if (node.comfyClass === "LoadImageBatchFromPath") {
+      setupImageBatchPicker(node);
     } else if (node.comfyClass === LOAD_PATH_NODE) {
       setupFilePicker(node);
     } else if (node.comfyClass === BATCH_NODE) {
@@ -141,6 +143,37 @@ function setupFolderPicker(node) {
   }
 
   button.label = "选择文件夹";
+  node.setDirtyCanvas(true, true);
+}
+
+function setupImageBatchPicker(node) {
+  const path = node.widgets?.find((w) => w.name === "path");
+  if (!path || path.__imageBatchPicker) return;
+  path.__imageBatchPicker = true;
+
+  node.addWidget("button", "选择图片（多选）", "select_images", async () => {
+    try {
+      const query = new URLSearchParams({ path: String(path.value ?? "") });
+      const response = await fetch(`/save_image_to_path/select_images?${query}`, {
+        method: "GET",
+        headers: { "Accept": "application/json" },
+      });
+      const data = await response.json();
+      if (!response.ok || data.error) {
+        throw new Error(data.error || `HTTP ${response.status}`);
+      }
+      if (!Array.isArray(data.paths) || !data.paths.length) return;
+      const value = data.paths.map((item) => `"${item.replaceAll('"', '""')}"`).join(",");
+      path.value = value;
+      path.callback?.(value);
+      node.setDirtyCanvas(true, true);
+    } catch (error) {
+      console.error("[SaveImageToPath] Image picker failed:", error);
+    }
+  }, { serialize: false, canvasOnly: true });
+  node.addWidget("button", "选择文件夹", "select_image_folder", async () => {
+    await openFolderPicker(path);
+  }, { serialize: false, canvasOnly: true });
   node.setDirtyCanvas(true, true);
 }
 

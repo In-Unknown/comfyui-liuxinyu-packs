@@ -1,5 +1,7 @@
 import asyncio
 import ctypes
+import csv
+import io
 import importlib.util as _ilu
 import os
 from pathlib import Path
@@ -135,7 +137,7 @@ if os.name == "nt":
 
             owner = user32.GetForegroundWindow()
             hr = _com_method(dialog, 3, ctypes.c_long, wintypes.HWND)(dialog, owner)
-            if hr == 0x800704C7:  # ERROR_CANCELLED
+            if (hr & 0xffffffff) == 0x800704C7:  # ERROR_CANCELLED
                 return None
             if hr < 0:
                 raise OSError(f"File dialog failed: 0x{hr & 0xffffffff:08X}")
@@ -161,7 +163,12 @@ if os.name == "nt":
             if old_dpi_context:
                 set_thread_dpi(old_dpi_context)
 
-    def _pick_file_native(default_path=""):
+    def _pick_file_native(default_path="", multiple=False):
+        if multiple and default_path:
+            try:
+                default_path = LoadImageBatchFromPath._parse_paths(default_path)[0]
+            except ValueError:
+                default_path = ""
         default_path = os.path.normpath(default_path.strip()) if default_path else ""
         ole32 = ctypes.windll.ole32
         shell32 = ctypes.windll.shell32
@@ -195,12 +202,23 @@ if os.name == "nt":
             if hr < 0:
                 raise OSError(f"GetOptions failed: 0x{hr & 0xffffffff:08X}")
             options.value |= FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST
+            if multiple:
+                options.value |= 0x00000200 | 0x00001000  # FOS_ALLOWMULTISELECT | FOS_FILEMUSTEXIST
             hr = _com_method(dialog, 9, ctypes.c_long, ctypes.c_uint32)(dialog, options.value)
             if hr < 0:
                 raise OSError(f"SetOptions failed: 0x{hr & 0xffffffff:08X}")
 
-            title = ctypes.c_wchar_p("选择文件")
+            title = ctypes.c_wchar_p("选择图片（多选）" if multiple else "选择文件")
             _com_method(dialog, 17, ctypes.c_long, ctypes.c_wchar_p)(dialog, title)
+            if multiple:
+                class COMDLG_FILTERSPEC(ctypes.Structure):
+                    _fields_ = [("pszName", ctypes.c_wchar_p), ("pszSpec", ctypes.c_wchar_p)]
+
+                extensions = sorted(ext for ext, fmt in Image.registered_extensions().items() if fmt in Image.OPEN)
+                filters = (COMDLG_FILTERSPEC * 1)(COMDLG_FILTERSPEC("图片", ";".join("*" + ext for ext in extensions)))
+                hr = _com_method(dialog, 4, ctypes.c_long, ctypes.c_uint, ctypes.POINTER(COMDLG_FILTERSPEC))(dialog, 1, filters)
+                if hr < 0:
+                    raise OSError(f"SetFileTypes failed: 0x{hr & 0xffffffff:08X}")
 
             if default_path and os.path.isfile(default_path):
                 pidl = ctypes.c_void_p()
@@ -247,10 +265,42 @@ if os.name == "nt":
 
             owner = user32.GetForegroundWindow()
             hr = _com_method(dialog, 3, ctypes.c_long, wintypes.HWND)(dialog, owner)
-            if hr == 0x800704C7:
+            if (hr & 0xffffffff) == 0x800704C7:
                 return None
             if hr < 0:
                 raise OSError(f"File dialog failed: 0x{hr & 0xffffffff:08X}")
+
+            if multiple:
+                items = ctypes.c_void_p()
+                hr = _com_method(dialog, 27, ctypes.c_long, ctypes.POINTER(ctypes.c_void_p))(dialog, ctypes.byref(items))
+                if hr < 0:
+                    raise OSError(f"GetResults failed: 0x{hr & 0xffffffff:08X}")
+                try:
+                    count = ctypes.c_uint32()
+                    hr = _com_method(items, 7, ctypes.c_long, ctypes.POINTER(ctypes.c_uint32))(items, ctypes.byref(count))
+                    if hr < 0:
+                        raise OSError(f"GetCount failed: 0x{hr & 0xffffffff:08X}")
+                    paths = []
+                    for index in range(count.value):
+                        item = ctypes.c_void_p()
+                        hr = _com_method(items, 8, ctypes.c_long, ctypes.c_uint32, ctypes.POINTER(ctypes.c_void_p))(items, index, ctypes.byref(item))
+                        if hr < 0:
+                            raise OSError(f"GetItemAt failed: 0x{hr & 0xffffffff:08X}")
+                        try:
+                            path_ptr = ctypes.c_wchar_p()
+                            hr = _com_method(item, 5, ctypes.c_long, ctypes.c_uint32, ctypes.POINTER(ctypes.c_wchar_p))(item, SIGDN_FILESYSPATH, ctypes.byref(path_ptr))
+                            try:
+                                if hr < 0 or not path_ptr.value:
+                                    raise OSError(f"GetDisplayName failed: 0x{hr & 0xffffffff:08X}")
+                                paths.append(path_ptr.value)
+                            finally:
+                                if path_ptr:
+                                    ole32.CoTaskMemFree(path_ptr)
+                        finally:
+                            _release(item)
+                    return paths
+                finally:
+                    _release(items)
 
             shell_item = ctypes.c_void_p()
             hr = _com_method(dialog, 20, ctypes.c_long, ctypes.POINTER(ctypes.c_void_p))(dialog, ctypes.byref(shell_item))
@@ -297,6 +347,14 @@ if os.name == "nt":
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)
 
+    async def _select_images(request):
+        try:
+            paths = await asyncio.to_thread(_pick_file_native, request.query.get("path", ""), True)
+            return web.json_response({"paths": paths})
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+
+    PromptServer.instance.routes.get("/save_image_to_path/select_images")(_select_images)
     PromptServer.instance.routes.get("/save_image_to_path/select_folder")(_select_folder)
     PromptServer.instance.routes.get("/save_image_to_path/select_file")(_select_file)
 
@@ -491,6 +549,98 @@ class LoadImageFromPath:
         }
 
 
+class LoadImageBatchFromPath:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "path": ("STRING", {"default": "", "multiline": False, "display_name": "图像路径", "tooltip": "可输入或连接 STRING：单个文件夹（递归加载）、单张图片路径，或用英文逗号分隔且每项用双引号包裹的多图片路径。支持路径内逗号（CSV 双引号转义）。可使用「选择图片（多选）」或「选择文件夹」按钮。文件夹按相对路径排序，多文件保持输入顺序。按 EXIF 修正方向后，所有图片宽高比必须完全一致；不同尺寸使用 LANCZOS 上采样到像素最多的图片尺寸。动图和多页图片仅加载第一帧。"}),
+        }}
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("图像批次",)
+    FUNCTION = "execute"
+    CATEGORY = "image"
+    DESCRIPTION = "从文件夹、单文件或 CSV 多文件路径加载 RGB 图像批次。递归目录按路径排序；EXIF 修正后的宽高比必须精确一致，并统一上采样到最大尺寸。"
+
+    @staticmethod
+    def _parse_paths(path):
+        text = path.strip()
+        if not text:
+            raise ValueError("图像路径不能为空。")
+        if not text.startswith('"'):
+            return [text]
+        try:
+            rows = list(csv.reader(io.StringIO(text), skipinitialspace=True, strict=True))
+        except csv.Error as e:
+            raise ValueError(f"多文件路径格式错误，请使用双引号包裹每个路径并以英文逗号分隔：{e}") from e
+        if len(rows) != 1 or not rows[0] or any(not item.strip() for item in rows[0]):
+            raise ValueError("多文件路径格式错误：路径不能为空，且必须为单行 CSV。")
+        return rows[0]
+
+    @classmethod
+    def _resolve_paths(cls, path):
+        paths = [Path(item) for item in cls._parse_paths(path)]
+        if len(paths) == 1 and paths[0].is_dir():
+            root = paths[0]
+            extensions = {ext for ext, fmt in Image.registered_extensions().items() if fmt in Image.OPEN}
+            files = []
+
+            def scan_error(error):
+                raise ValueError(f"无法读取图像目录：{error.filename}：{error}") from error
+
+            for folder, _, names in os.walk(root, onerror=scan_error):
+                files.extend(Path(folder) / name for name in names if Path(name).suffix.lower() in extensions)
+            paths = sorted(files, key=lambda p: (p.relative_to(root).as_posix().casefold(), p.relative_to(root).as_posix()))
+            if not paths:
+                raise ValueError(f"文件夹中没有支持的图片（已递归搜索）：{root}")
+        for item in paths:
+            if not item.is_file():
+                raise ValueError(f"无效图像文件路径（不存在、不可访问或不是文件；多文件输入不允许包含文件夹）：{item}")
+        return paths
+
+    @classmethod
+    def IS_CHANGED(cls, path):
+        # 外部文件或目录内容可能在相同路径下被替换，执行时重新读取。
+        return float("nan")
+
+    def execute(self, path):
+        from PIL import ImageOps
+
+        paths = self._resolve_paths(path)
+        images = []
+        try:
+            for item in paths:
+                try:
+                    with Image.open(item) as source:
+                        corrected = ImageOps.exif_transpose(source)
+                        try:
+                            img = corrected.convert("RGB")
+                        finally:
+                            if corrected is not source:
+                                corrected.close()
+                    images.append(img)
+                except Exception as e:
+                    raise ValueError(f"无法加载图片（损坏、不支持或无法读取）：{item}：{e}") from e
+                w, h = img.size
+                first_w, first_h = images[0].size
+                if w * first_h != first_w * h:
+                    raise ValueError(f"图片宽高比不一致（EXIF 修正后）：{paths[0]}（{first_w}×{first_h}）与 {item}（{w}×{h}）。所有图片必须具有完全相同的宽高比。")
+
+            target = max((img.size for img in images), key=lambda size: size[0] * size[1])
+            tensors = []
+            for img in images:
+                if img.size == target:
+                    pixels = np.array(img, dtype=np.float32) / 255.0
+                else:
+                    with img.resize(target, Image.Resampling.LANCZOS) as resized:
+                        pixels = np.array(resized, dtype=np.float32) / 255.0
+                tensors.append(torch.from_numpy(pixels))
+            return (torch.stack(tensors),)
+        finally:
+            for img in images:
+                img.close()
+
+
 class LoadPath:
     @classmethod
     def INPUT_TYPES(cls):
@@ -544,6 +694,7 @@ NODE_CLASS_MAPPINGS = {
     "SaveSelectedFromBatch": SaveSelectedFromBatch,
     "LoadPath": LoadPath,
     "LoadImageFromPath": LoadImageFromPath,
+    "LoadImageBatchFromPath": LoadImageBatchFromPath,
     "ImageMaskCombinations": ImageMaskCombinations,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -551,6 +702,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SaveSelectedFromBatch": "从批次中选择保存图片",
     "LoadPath": "加载路径",
     "LoadImageFromPath": "从路径加载图片",
+    "LoadImageBatchFromPath": "从路径加载图像批次",
     "ImageMaskCombinations": "遮罩区域图片排列组合",
 }
 WEB_DIRECTORY = "."
