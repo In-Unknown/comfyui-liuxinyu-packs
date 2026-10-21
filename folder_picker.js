@@ -1,6 +1,16 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
+// Adapter for the installed ComfyUI frontend 1.53.6 issue panel.
+const previewErrorBridge = import("/assets/settingStore-DDHzGrHr.js")
+  .then(({ Ot: useExecutionErrorStore, bs: getExecutionIdByNode }) => ({
+    store: useExecutionErrorStore(), getExecutionIdByNode,
+  }))
+  .catch((error) => {
+    console.error("[SaveImageToPath] 无法连接工作流问题面板", error);
+    return null;
+  });
+
 const SAVE_IMAGE_NODE = "SaveImageToAbsolutePath";
 const LOAD_PATH_NODE = "LoadPath";
 const BATCH_NODE = "SaveSelectedFromBatch";
@@ -85,7 +95,7 @@ app.registerExtension({
   async beforeRegisterNodeDef(nodeType, nodeData) {
     if (nodeData?.name !== BATCH_NODE) return;
 
-    // 节点执行后：拿到 ui.images（temp 预览文件）和 session_id，渲染 DOM 网格
+    // 节点执行后：按 ui.images 的实际文件名渲染和保存，可包含多个批次。
     const originalOnExecuted = nodeType.prototype.onExecuted;
     nodeType.prototype.onExecuted = function (result) {
       // 拿走 images 再交给核心，核心不会创建 canvas 预览 widget
@@ -112,6 +122,8 @@ app.registerExtension({
     } else if (node.comfyClass === LOAD_PATH_NODE || node.comfyClass === "LoadImageFromPath") {
       setupFilePicker(node);
       setupPathPreview(node);
+    } else if (node.comfyClass === "LiuxinyuLoadTextFile") {
+      setupFilePicker(node);
     } else if (node.comfyClass === BATCH_NODE) {
       setupFolderPicker(node);
       setupBatchSelector(node);
@@ -130,6 +142,40 @@ function setupPathPreview(node) {
   let controller;
   let outputKey;
   let ownedOutput;
+  let previewErrorNodeId;
+  let previewErrorGraph;
+  const errorType = `liuxinyu_path_preview_${session}`;
+  const reportPreviewError = async (message, version) => {
+    const bridge = await previewErrorBridge;
+    if (version !== revision) return;
+    if (!bridge) {
+      if (message) app.extensionManager.toast.add({ severity: "error", summary: "路径预览检查失败", detail: message });
+      return;
+    }
+    const { store, getExecutionIdByNode } = bridge;
+    const id = removed ? previewErrorNodeId : getExecutionIdByNode(app.rootGraph, node);
+    if (!id || (removed && previewErrorGraph !== app.rootGraph)) return;
+    if (message) {
+      previewErrorNodeId = id;
+      previewErrorGraph = app.rootGraph;
+    }
+    const errors = { ...(store.lastNodeErrors || {}) };
+    const previous = errors[id];
+    const retained = (previous?.errors || []).filter((error) => error.type !== errorType);
+    if (message) retained.push({
+      type: errorType,
+      message: "图像路径检查失败",
+      details: message,
+      extra_info: { input_name: "path" },
+    });
+    if (retained.length) {
+      errors[id] = { ...previous, class_type: node.comfyClass, dependent_outputs: previous?.dependent_outputs || [], errors: retained };
+    } else if (previous) {
+      delete errors[id];
+    }
+    store.recordNodeErrors(errors);
+    node.setDirtyCanvas(true, true);
+  };
   const pendingImages = new Set();
   const locator = () => node.graph?.isRootGraph === false ? `${node.graph.id}:${node.id}` : String(node.id);
   const releaseOutput = () => {
@@ -156,10 +202,20 @@ function setupPathPreview(node) {
     app.extensionManager?.toast?.add({ severity, summary: "路径预览", detail: message, life: 6000 });
     console.warn(`[SaveImageToPath] ${message}`);
   };
+  const dimensions = () => {
+    if (node.comfyClass !== "LoadImageBatchFromPath") return {};
+    const names = ["target_width", "target_height"];
+    const linked = names.map((name) => node.inputs?.some((input) => input.name === name && input.link != null));
+    return {
+      dimensions_pending: linked.some(Boolean),
+      target_width: Number(node.widgets?.find((widget) => widget.name === names[0])?.value ?? 0),
+      target_height: Number(node.widgets?.find((widget) => widget.name === names[1])?.value ?? 0),
+    };
+  };
   const request = (value, version, options = {}) => api.fetchApi("/save_image_to_path/preview_path", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session, revision: version, kind: node.comfyClass, path: value, clear: removed }),
+    body: JSON.stringify({ session, revision: version, kind: node.comfyClass, path: value, clear: removed, ...dimensions() }),
     ...options,
   });
   const loadImage = (meta) => new Promise((resolve, reject) => {
@@ -185,6 +241,11 @@ function setupPathPreview(node) {
     controller?.abort();
     for (const cancel of pendingImages) cancel();
     clear();
+    if (node.inputs?.some((input) => input.name === "path" && input.link != null)) {
+      // A connected path is evaluated upstream; do not validate a stale widget value.
+      void reportPreviewError(null, version);
+      return;
+    }
     timer = setTimeout(async () => {
       controller = new AbortController();
       try {
@@ -207,11 +268,12 @@ function setupPathPreview(node) {
         node.animatedImages = false;
         app.nodeOutputs = { ...app.nodeOutputs, [outputKey]: ownedOutput };
         node.setDirtyCanvas(true, true);
+        await reportPreviewError(null, version);
         if (data.warning) notify(data.warning, "warn");
       } catch (error) {
         if (removed || version !== revision || error.name === "AbortError") return;
         clear();
-        notify(error.message);
+        await reportPreviewError(error.message, version);
       }
     }, 180);
   };
@@ -219,6 +281,20 @@ function setupPathPreview(node) {
   path.callback = function (...args) {
     try { return callback?.apply(this, args); } finally { refresh(); }
   };
+  if (node.comfyClass === "LoadImageBatchFromPath") {
+    for (const widget of node.widgets.filter((item) => ["target_width", "target_height"].includes(item.name))) {
+      const callback = widget.callback;
+      widget.callback = function (...args) {
+        try { return callback?.apply(this, args); } finally { refresh(); }
+      };
+    }
+    const connectionsChanged = node.onConnectionsChange;
+    node.onConnectionsChange = function (...args) {
+      const result = connectionsChanged?.apply(this, args);
+      queueMicrotask(refresh);
+      return result;
+    };
+  }
   const configure = node.onConfigure;
   node.onConfigure = function (...args) {
     const result = configure?.apply(this, args);
@@ -229,6 +305,7 @@ function setupPathPreview(node) {
   node.onRemoved = function (...args) {
     removed = true;
     ++revision;
+    void reportPreviewError(null, revision);
     clearTimeout(timer);
     controller?.abort();
     for (const cancel of pendingImages) cancel();
@@ -339,7 +416,6 @@ function setupBatchSelector(node) {
   injectBatchStyles();
 
   const state = {
-    sessionId: null,
     imageMetas: [],
     selected: new Set(),
     button: null,
@@ -457,14 +533,9 @@ function moveWidgetAfter(node, widget, afterWidgetName) {
 function onBatchExecuted(node, result) {
   const state = node._batchState;
   if (!state) return;
-  let sessionId = result?.session_id;
-  // 防御：某些环节可能把 session_id 字符串拆成字符数组，join 回字符串
-  if (Array.isArray(sessionId)) sessionId = sessionId.join("");
-  if (typeof sessionId !== "string") sessionId = sessionId ? String(sessionId) : "";
   const metas = result?.images;
-  if (!sessionId || !Array.isArray(metas)) return;
+  if (!Array.isArray(metas)) return;
 
-  state.sessionId = sessionId;
   state.imageMetas = metas;
   state.selected.clear();
   syncSelectionWidget(node, "");
@@ -510,7 +581,6 @@ function renderBatchCells(node, metas) {
     cell.appendChild(check);
 
     cell.addEventListener("click", () => {
-      if (!state.sessionId) return;
       if (state.selected.has(i)) {
         state.selected.delete(i);
         cell.classList.remove("sitp-selected");
@@ -693,8 +763,8 @@ function updateButtonLabel(node) {
 async function saveSelectedFromBatch(node) {
   const state = node._batchState;
   if (!state) return;
-  if (!state.sessionId) {
-    console.warn("[SaveImageToPath] no session_id, 请先执行节点");
+  if (!state.imageMetas.length) {
+    console.warn("[SaveImageToPath] 请先执行节点生成预览");
     return;
   }
   if (!state.selected.size) {
@@ -706,20 +776,14 @@ async function saveSelectedFromBatch(node) {
   const folder = (folderWidget?.value ?? "").toString().trim();
   const filename = (filenameWidget?.value ?? "").toString().trim();
   const indices = Array.from(state.selected).sort((a, b) => a - b);
-
-  console.log("[SaveImageToPath] save_selected request:", {
-    session_id: state.sessionId,
-    indices,
-    folder,
-    filename,
-  });
+  const metas = state.imageMetas;
 
   try {
     const response = await fetch("/save_image_to_path/save_selected", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        session_id: state.sessionId,
+        preview_files: metas.map((meta) => meta.filename),
         indices,
         folder,
         filename,
@@ -729,18 +793,25 @@ async function saveSelectedFromBatch(node) {
     if (!response.ok || data.error) {
       throw new Error(data.error || `HTTP ${response.status}`);
     }
-    // 保存成功：清空选中状态与 selection 输入框
-    state.selected.clear();
-    state.container
-      ?.querySelectorAll(".sitp-batch-cell.sitp-selected")
-      .forEach((el) => el.classList.remove("sitp-selected"));
-    syncSelectionWidget(node, "");
-    updateButtonLabel(node);
+    // Only clear selections successfully saved from this preview snapshot.
+    if (state.imageMetas === metas) {
+      const skipped = new Set(data.skipped || []);
+      for (const index of indices) {
+        if (!skipped.has(index)) state.selected.delete(index);
+      }
+      state.container?.querySelectorAll(".sitp-batch-cell").forEach((el) => {
+        el.classList.toggle("sitp-selected", state.selected.has(Number(el.dataset.index)));
+      });
+      syncSelectionWidget(node, Array.from(state.selected).sort((a, b) => a - b).join(","));
+      updateButtonLabel(node);
+    }
     if (data.message) {
       console.log("[SaveImageToPath] " + data.message);
+      app.extensionManager.toast.add({ severity: data.skipped?.length ? "warn" : "success", summary: "保存所选", detail: data.message, life: 6000 });
     }
   } catch (e) {
     console.error("[SaveImageToPath] save_selected failed:", e);
+    app.extensionManager.toast.add({ severity: "error", summary: "保存所选失败", detail: e.message });
   }
 }
 

@@ -44,6 +44,76 @@ _compositing_spec.loader.exec_module(_compositing_module)
 ImageMaskCombinations = _compositing_module.ImageMaskCombinations
 
 
+_stitch_spec = _ilu.spec_from_file_location(
+    "_liuxinyu_stitch_batch_node",
+    os.path.join(os.path.dirname(__file__), "stitch_batch_node.py"),
+)
+if _stitch_spec is None or _stitch_spec.loader is None:
+    raise ImportError("Failed to load stitch_batch_node.py spec")
+_stitch_module = _ilu.module_from_spec(_stitch_spec)
+_stitch_spec.loader.exec_module(_stitch_module)
+LiuxinyuStitchImageBatchList = _stitch_module.LiuxinyuStitchImageBatchList
+
+
+_function_grid_spec = _ilu.spec_from_file_location(
+    "_liuxinyu_function_grid_node",
+    os.path.join(os.path.dirname(__file__), "function_grid_node.py"),
+)
+if _function_grid_spec is None or _function_grid_spec.loader is None:
+    raise ImportError("Failed to load function_grid_node.py spec")
+_function_grid_module = _ilu.module_from_spec(_function_grid_spec)
+_function_grid_spec.loader.exec_module(_function_grid_module)
+LiuxinyuFunctionGrid = _function_grid_module.LiuxinyuFunctionGrid
+
+
+_number_spec = _ilu.spec_from_file_location(
+    "_liuxinyu_number_node",
+    os.path.join(os.path.dirname(__file__), "number_node.py"),
+)
+if _number_spec is None or _number_spec.loader is None:
+    raise ImportError("Failed to load number_node.py spec")
+_number_module = _ilu.module_from_spec(_number_spec)
+_number_spec.loader.exec_module(_number_module)
+LiuxinyuNumberToString = _number_module.LiuxinyuNumberToString
+LiuxinyuStringToLiteral = _number_module.LiuxinyuStringToLiteral
+LiuxinyuNumberConvert = _number_module.LiuxinyuNumberConvert
+
+
+_string_spec = _ilu.spec_from_file_location(
+    "_liuxinyu_string_node",
+    os.path.join(os.path.dirname(__file__), "string_node.py"),
+)
+if _string_spec is None or _string_spec.loader is None:
+    raise ImportError("Failed to load string_node.py spec")
+_string_module = _ilu.module_from_spec(_string_spec)
+_string_spec.loader.exec_module(_string_module)
+LiuxinyuLoadTextFile = _string_module.LiuxinyuLoadTextFile
+LiuxinyuStringToJSObject = _string_module.LiuxinyuStringToJSObject
+LiuxinyuReadJSObjectPath = _string_module.LiuxinyuReadJSObjectPath
+LiuxinyuPreviewJSObject = _string_module.LiuxinyuPreviewJSObject
+LiuxinyuStringConcatenate = _string_module.LiuxinyuStringConcatenate
+LiuxinyuTextFromTemplate = _string_module.LiuxinyuTextFromTemplate
+LiuxinyuStringCombinations = _string_module.LiuxinyuStringCombinations
+LiuxinyuStringArrayGet = _string_module.LiuxinyuStringArrayGet
+LiuxinyuStringArrayBuild = _string_module.LiuxinyuStringArrayBuild
+LiuxinyuStringArraySplit = _string_module.LiuxinyuStringArraySplit
+LiuxinyuStringArrayJoin = _string_module.LiuxinyuStringArrayJoin
+LiuxinyuStringArraySort = _string_module.LiuxinyuStringArraySort
+LiuxinyuPreviewText = _string_module.LiuxinyuPreviewText
+LiuxinyuDynamicMultilineText = _string_module.LiuxinyuDynamicMultilineText
+
+
+_paint_spec = _ilu.spec_from_file_location(
+    "_liuxinyu_ratio_paint_node",
+    os.path.join(os.path.dirname(__file__), "ratio_paint_node.py"),
+)
+if _paint_spec is None or _paint_spec.loader is None:
+    raise ImportError("Failed to load ratio_paint_node.py spec")
+_paint_module = _ilu.module_from_spec(_paint_spec)
+_paint_spec.loader.exec_module(_paint_module)
+LiuxinyuRatioPaint = _paint_module.LiuxinyuRatioPaint
+
+
 if os.name == "nt":
     import ctypes.wintypes as wintypes
 
@@ -371,6 +441,7 @@ if os.name == "nt":
                 data.get("indices", []),
                 data.get("folder", ""),
                 data.get("filename", ""),
+                preview_files=data.get("preview_files"),
             )
             status = 500 if "error" in result else 200
             return web.json_response(result, status=status)
@@ -558,14 +629,27 @@ class LoadImageBatchFromPath:
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {
-            "path": ("STRING", {"default": "", "multiline": False, "display_name": "图像路径", "tooltip": "可输入或连接 STRING：单个文件夹（递归加载）、单张图片路径，或用英文逗号分隔且每项用双引号包裹的多图片路径。支持路径内逗号（CSV 双引号转义）。可使用「选择图片（多选）」或「选择文件夹」按钮。文件夹按相对路径排序，多文件保持输入顺序。按 EXIF 修正方向后，所有图片宽高比必须完全一致；不同尺寸使用 LANCZOS 上采样到像素最多的图片尺寸。动图和多页图片仅加载第一帧。"}),
+            "path": ("STRING", {"default": "", "multiline": False, "display_name": "图像路径", "tooltip": "支持文件夹（递归）、单张图片或 CSV 多图片路径。传入目标宽高时直接拉伸或压缩至指定尺寸；不传时要求图片比例完全一致，并放大到像素最多的图片尺寸。动图和多页图片仅加载第一帧。"}),
+        }, "optional": {
+            "target_width": ("INT", {"display_name": "目标宽度", "default": 0, "min": 0, "max": 2147483647, "tooltip": "像素宽度，可直接填写或连接整数。与目标高度一起设为正整数；两项均为 0 时使用原有比例规则。"}),
+            "target_height": ("INT", {"display_name": "目标高度", "default": 0, "min": 0, "max": 2147483647, "tooltip": "像素高度，可直接填写或连接整数。与目标宽度一起设为正整数，直接改变比例，不裁剪、不补边。"}),
         }}
 
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("图像批次",)
     FUNCTION = "execute"
     CATEGORY = "image"
-    DESCRIPTION = "从文件夹、单文件或 CSV 多文件路径加载 RGB 图像批次。递归目录按路径排序；EXIF 修正后的宽高比必须精确一致，并统一上采样到最大尺寸。"
+    DESCRIPTION = "从路径加载图像批次。传入目标宽高时，全部图片直接拉伸或压缩到指定尺寸，不裁剪、不补边；不传时，选图后检查全部图片的比例，比例一致则统一放大到最大图片尺寸，不一致则提示错误。目标尺寸来自上游计算时，选图阶段显示原图预览，运行时按实际尺寸缩放。"
+
+    @staticmethod
+    def _target_size(target_width=0, target_height=0):
+        if type(target_width) is not int or type(target_height) is not int:
+            raise ValueError("目标宽度和目标高度必须为整数。")
+        if target_width == 0 and target_height == 0:
+            return None
+        if target_width <= 0 or target_height <= 0:
+            raise ValueError("请同时传入大于 0 的目标宽度和目标高度；不指定尺寸时两项均不传或均为 0。")
+        return (target_width, target_height)
 
     @staticmethod
     def _parse_paths(path):
@@ -604,13 +688,14 @@ class LoadImageBatchFromPath:
         return paths
 
     @classmethod
-    def IS_CHANGED(cls, path):
+    def IS_CHANGED(cls, path, target_width=0, target_height=0):
         # 外部文件或目录内容可能在相同路径下被替换，执行时重新读取。
         return float("nan")
 
-    def execute(self, path):
+    def execute(self, path, target_width=0, target_height=0):
         from PIL import ImageOps
 
+        target = self._target_size(target_width, target_height)
         paths = self._resolve_paths(path)
         images = []
         try:
@@ -628,10 +713,11 @@ class LoadImageBatchFromPath:
                     raise ValueError(f"无法加载图片（损坏、不支持或无法读取）：{item}：{e}") from e
                 w, h = img.size
                 first_w, first_h = images[0].size
-                if w * first_h != first_w * h:
+                if target is None and w * first_h != first_w * h:
                     raise ValueError(f"图片宽高比不一致（EXIF 修正后）：{paths[0]}（{first_w}×{first_h}）与 {item}（{w}×{h}）。所有图片必须具有完全相同的宽高比。")
 
-            target = max((img.size for img in images), key=lambda size: size[0] * size[1])
+            if target is None:
+                target = max((img.size for img in images), key=lambda size: size[0] * size[1])
             tensors = []
             for img in images:
                 if img.size == target:
@@ -746,27 +832,58 @@ def _path_preview(data):
         try:
             paths = (LoadImageBatchFromPath._resolve_paths(path)
                      if kind == "LoadImageBatchFromPath" else [Path(path.strip())])
+            target = None
+            dimensions_pending = False
+            if kind == "LoadImageBatchFromPath":
+                dimensions_pending = data.get("dimensions_pending") is True
+                if not dimensions_pending:
+                    target = LoadImageBatchFromPath._target_size(
+                        data.get("target_width", 0), data.get("target_height", 0),
+                    )
             output = []
             temp = Path(folder_paths.get_temp_directory())
             temp.mkdir(parents=True, exist_ok=True)
-            for item in paths[:_PATH_PREVIEW_LIMIT]:
+            first_size = None
+            preview_paths = paths if kind == "LoadImageBatchFromPath" else paths[:_PATH_PREVIEW_LIMIT]
+            for index, item in enumerate(preview_paths):
                 try:
                     with Image.open(item) as source:
+                        if kind == "LoadImageBatchFromPath":
+                            # Check original dimensions before thumbnail rounding;
+                            # inspect all files, including those beyond the preview limit.
+                            width, height = source.size
+                            if source.getexif().get(274) in (5, 6, 7, 8):
+                                width, height = height, width
+                            if first_size is None:
+                                first_size = (width, height)
+                            first_width, first_height = first_size
+                            if target is None and not dimensions_pending and width * first_height != first_width * height:
+                                raise ValueError(
+                                    f"图片宽高比不一致（EXIF 修正后）：{paths[0]}（{first_width}×{first_height}）"
+                                    f"与 {item}（{width}×{height}）。请重新选择宽高比完全一致的图片。"
+                                )
+                            if index >= _PATH_PREVIEW_LIMIT:
+                                continue
                         # First frame only, as in the batch loader. Reduce before
                         # EXIF transpose/RGB conversion to avoid full-size copies.
                         source.thumbnail((512, 512), Image.Resampling.LANCZOS)
                         with ImageOps.exif_transpose(source) as corrected:
-                            with corrected.convert("RGB") as image:
-                                target = temp / f"path_preview_{uuid.uuid4().hex}.jpg"
-                                entry["files"].append(target)
-                                image.save(target, format="JPEG", quality=85)
+                            with corrected.convert("RGB") as rgb:
+                                preview_size = rgb.size
+                                if target is not None:
+                                    scale = min(512 / target[0], 512 / target[1], 1)
+                                    preview_size = (max(1, round(target[0] * scale)), max(1, round(target[1] * scale)))
+                                preview_file = temp / f"path_preview_{uuid.uuid4().hex}.jpg"
+                                entry["files"].append(preview_file)
+                                with rgb.resize(preview_size, Image.Resampling.LANCZOS) as image:
+                                    image.save(preview_file, format="JPEG", quality=85)
                 except UnidentifiedImageError as error:
                     if kind == "LoadPath":
                         return {"images": []}
                     raise ValueError(f"无法加载图片（损坏或不支持）：{item}") from error
                 except (OSError, ValueError) as error:
                     raise ValueError(f"无法预览图片：{item}：{error}") from error
-                output.append({"filename": target.name, "subfolder": "", "type": "temp"})
+                output.append({"filename": preview_file.name, "subfolder": "", "type": "temp"})
             result = {"images": output, "total": len(paths)}
             if len(paths) > _PATH_PREVIEW_LIMIT:
                 result["warning"] = f"仅预览前 {_PATH_PREVIEW_LIMIT} 张，共 {len(paths)} 张；工作流仍加载全部图片。"
@@ -804,6 +921,26 @@ NODE_CLASS_MAPPINGS = {
     "LoadImageFromPath": LoadImageFromPath,
     "LoadImageBatchFromPath": LoadImageBatchFromPath,
     "ImageMaskCombinations": ImageMaskCombinations,
+    "LiuxinyuStitchImageBatchList": LiuxinyuStitchImageBatchList,
+    "LiuxinyuFunctionGrid": LiuxinyuFunctionGrid,
+    "LiuxinyuNumberToString": LiuxinyuNumberToString,
+    "LiuxinyuStringToLiteral": LiuxinyuStringToLiteral,
+    "LiuxinyuNumberConvert": LiuxinyuNumberConvert,
+    "LiuxinyuStringConcatenate": LiuxinyuStringConcatenate,
+    "LiuxinyuLoadTextFile": LiuxinyuLoadTextFile,
+    "LiuxinyuStringToJSObject": LiuxinyuStringToJSObject,
+    "LiuxinyuReadJSObjectPath": LiuxinyuReadJSObjectPath,
+    "LiuxinyuPreviewJSObject": LiuxinyuPreviewJSObject,
+    "LiuxinyuTextFromTemplate": LiuxinyuTextFromTemplate,
+    "LiuxinyuStringCombinations": LiuxinyuStringCombinations,
+    "LiuxinyuStringArrayGet": LiuxinyuStringArrayGet,
+    "LiuxinyuStringArrayBuild": LiuxinyuStringArrayBuild,
+    "LiuxinyuStringArraySplit": LiuxinyuStringArraySplit,
+    "LiuxinyuStringArrayJoin": LiuxinyuStringArrayJoin,
+    "LiuxinyuStringArraySort": LiuxinyuStringArraySort,
+    "LiuxinyuPreviewText": LiuxinyuPreviewText,
+    "LiuxinyuDynamicMultilineText": LiuxinyuDynamicMultilineText,
+    "LiuxinyuRatioPaint": LiuxinyuRatioPaint,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "SaveImageToAbsolutePath": "保存图像到绝对路径",
@@ -812,5 +949,25 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LoadImageFromPath": "从路径加载图片",
     "LoadImageBatchFromPath": "从路径加载图像批次",
     "ImageMaskCombinations": "遮罩区域图片排列组合",
+    "LiuxinyuStitchImageBatchList": "从批次列表拼接图片",
+    "LiuxinyuFunctionGrid": "函数生成精度数列",
+    "LiuxinyuNumberToString": "数字转换为字符串",
+    "LiuxinyuStringToLiteral": "字符串转为字面量",
+    "LiuxinyuNumberConvert": "数字转换",
+    "LiuxinyuStringConcatenate": "字符串拼接",
+    "LiuxinyuLoadTextFile": "从文本文件中获取字符串",
+    "LiuxinyuStringToJSObject": "字符串转为JS对象",
+    "LiuxinyuReadJSObjectPath": "使用js点符号语句读取对象",
+    "LiuxinyuPreviewJSObject": "预览JS对象或数组",
+    "LiuxinyuTextFromTemplate": "从模板生成文本",
+    "LiuxinyuStringCombinations": "字符串排列组合",
+    "LiuxinyuStringArrayGet": "从字符串数组读取字符串",
+    "LiuxinyuStringArrayBuild": "组装字符串为字符串数组",
+    "LiuxinyuStringArraySplit": "切分字符串为数组",
+    "LiuxinyuStringArrayJoin": "拼装字符串数组为字符串",
+    "LiuxinyuStringArraySort": "排序字符串数组",
+    "LiuxinyuPreviewText": "预览参数组合或字符串数组",
+    "LiuxinyuDynamicMultilineText": "动态多块多行字符串",
+    "LiuxinyuRatioPaint": "绘制蒙版绘制画笔于比例图像",
 }
 WEB_DIRECTORY = "."

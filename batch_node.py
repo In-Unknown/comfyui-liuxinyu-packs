@@ -135,7 +135,7 @@ class SaveSelectedFromBatch:
                 self._save_image(img, target, ext)
                 auto_saved.append(str(target))
 
-        ui = {"images": ui_images, "session_id": session_id}
+        ui = {"images": ui_images, "session_id": [session_id]}
         if auto_saved:
             ui["text"] = ["已自动保存 " + str(len(auto_saved)) + " 张：\n" + "\n".join(auto_saved)]
         else:
@@ -144,10 +144,22 @@ class SaveSelectedFromBatch:
         return {"ui": ui}
 
     @staticmethod
-    def save_selected_from_temp(session_id, indices, folder, filename):
-        """由后端路由调用：从 temp 目录读取指定 session 的预览图，按 indices 顺序追加保存到目标 folder。"""
-        if not session_id or not indices or not folder or not filename:
-            return {"error": "missing session_id/indices/folder/filename"}
+    def save_selected_from_temp(session_id, indices, folder, filename, preview_files=None):
+        """按显示下标读取对应预览文件；旧请求仍可指定单个 session。"""
+        if not indices or not folder or not filename:
+            return {"error": "missing indices/folder/filename"}
+        if not isinstance(indices, list) or any(type(idx) is not int or idx < 0 for idx in indices):
+            return {"error": "invalid indices"}
+        if preview_files is not None:
+            if not isinstance(preview_files, list) or any(
+                not isinstance(name, str) or not re.fullmatch(r"SaveSelectedFromBatch_[0-9a-f]{32}_[0-9]{6,}\.png", name)
+                for name in preview_files
+            ):
+                return {"error": "invalid preview filenames"}
+            if any(idx >= len(preview_files) for idx in indices):
+                return {"error": "preview index out of range"}
+        elif not isinstance(session_id, str) or not re.fullmatch(r"[0-9a-f]{32}", session_id):
+            return {"error": "invalid session_id; refresh the browser before saving multiple batches"}
 
         folder = os.path.normpath(folder.strip())
         if not folder or not os.path.isabs(folder):
@@ -168,21 +180,20 @@ class SaveSelectedFromBatch:
 
         saved = []
         skipped = []
-        for offset, idx in enumerate(indices):
-            preview_name = SaveSelectedFromBatch._preview_name(session_id, idx)
+        for idx in indices:
+            preview_name = preview_files[idx] if preview_files is not None else SaveSelectedFromBatch._preview_name(session_id, idx)
             src = temp_dir / preview_name
             if not src.exists():
                 skipped.append(idx)
                 continue
-            img = Image.open(src)
-            if img is None:
-                skipped.append(idx)
-                continue
-            if ext in {".jpg", ".jpeg"} and img.mode != "RGB":
-                img = img.convert("RGB")
-            k = start_k + offset
+            k = start_k + len(saved)
             target = Path(folder) / f"{stem}_{k}{suffix}"
-            SaveSelectedFromBatch._save_image(img, target, ext)
+            with Image.open(src) as img:
+                if ext in {".jpg", ".jpeg"} and img.mode != "RGB":
+                    with img.convert("RGB") as converted:
+                        SaveSelectedFromBatch._save_image(converted, target, ext)
+                else:
+                    SaveSelectedFromBatch._save_image(img, target, ext)
             saved.append(str(target))
 
         msg = "已保存 " + str(len(saved)) + " 张"

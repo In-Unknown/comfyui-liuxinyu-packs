@@ -9,3 +9,4 @@ venv/
 .env
 .trae/
 pyrightconfig.json
+*.bak
