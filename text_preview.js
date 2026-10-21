@@ -63,13 +63,11 @@ function setupPreview(node) {
   hint.textContent = "滚轮滚动表格；Ctrl + 滚轮缩放画布。";
   panel.append(toolbar, body, hint);
 
-  function fitPanel() {
-    const width = `${Math.max(0, node.size[0] - 20)}px`;
-    if (panel.style.width !== width) panel.style.width = width;
-  }
-  const widget = node.addDOMWidget("text_preview", "custom", panel, {
+  let widget;
+  widget = node.addDOMWidget("text_preview", "custom", panel, {
     hideOnZoom: false, getMinHeight: () => 120,
-    onDraw: fitPanel, afterResize: fitPanel,
+    onDraw: () => { if (widget) widget.width = undefined; },
+    afterResize: () => { if (widget) widget.width = undefined; }
   });
   widget.serialize = false;
 
@@ -227,7 +225,6 @@ function setupPreview(node) {
     return removed?.apply(this, args);
   };
   node.setSize([Math.max(node.size[0], 480), Math.max(node.size[1], 340)]);
-  fitPanel();
   render();
 }
 
@@ -236,7 +233,7 @@ app.registerExtension({
   setup() {
     const style = document.createElement("style");
     style.textContent = `
-      .liuxinyu-text-preview { display:flex; flex-direction:column; gap:8px; padding:10px; box-sizing:border-box; width:100%; max-width:100%; min-width:0; height:100%; min-height:0; overflow:hidden; contain:inline-size; color:var(--input-text,#ddd); background:var(--comfy-input-bg,#222); border-radius:6px; font:13px sans-serif; }
+      .liuxinyu-text-preview { display:flex; flex-direction:column; gap:8px; padding:10px; box-sizing:border-box; width:100%; max-width:100%; min-width:0; height:100%; min-height:0; overflow:hidden; color:var(--input-text,#ddd); background:var(--comfy-input-bg,#222); border-radius:6px; font:13px sans-serif; }
       .liuxinyu-text-preview .ltp-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:8px; flex:none; min-width:0; overflow-wrap:anywhere; }
       .liuxinyu-text-preview .ltp-toolbar > span { min-width:0; }
       .liuxinyu-text-preview .ltp-body { flex:1; min-width:0; min-height:0; overflow-y:auto; overflow-x:hidden; scrollbar-gutter:stable; overflow-wrap:anywhere; user-select:text; overflow-anchor:none; }

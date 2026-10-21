@@ -596,3 +596,34 @@ class LiuxinyuStringArraySort(io.ComfyNode):
     def execute(cls, strings):
         chinese_keys = {}
         return io.NodeOutput(sorted(strings, key=lambda text: _string_natural_sort_key(text, chinese_keys)))
+
+
+class LiuxinyuJSObjectToString(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="LiuxinyuJSObjectToString",
+            display_name="js对象转换为字符串",
+            category="utils/conversion",
+            search_aliases=["对象转字符串", "数组转字符串", "json to string", "object to string"],
+            description=(
+                "把字符串、参数组合、对象或数组转换为字符串。字符串原样返回；"
+                "对象、数组和参数组合使用 JSON 文本，保留中文和嵌套结构。"
+                "连接数组或参数组合时整体转换为一个字符串，不逐项拆分。"
+            ),
+            inputs=[io.MultiType.Input(
+                "value",
+                types=[io.String, TemplateParameters, io.Dict, io.Array],
+                display_name="值",
+                tooltip="可连接字符串、参数组合、对象或数组。",
+            )],
+            outputs=[io.String.Output(display_name="字符串")],
+        )
+
+    @classmethod
+    def execute(cls, value):
+        if isinstance(value, str):
+            return io.NodeOutput(value)
+        if isinstance(value, (dict, list)):
+            return io.NodeOutput(json.dumps(value, ensure_ascii=False))
+        raise ValueError(f"无法把 {type(value).__name__} 转换为字符串：{value!r}")
