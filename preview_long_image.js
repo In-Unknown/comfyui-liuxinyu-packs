@@ -99,7 +99,7 @@ app.registerExtension({
       
       const singleScroll = document.createElement("div");
       singleScroll.className = "llp-scroll";
-      singleScroll.style.cssText = "flex:1; overflow:auto; display:flex; align-items:center; justify-content:center; scrollbar-width:none; -ms-overflow-style:none;";
+      singleScroll.style.cssText = "flex:1; overflow:auto; display:block; position:relative; scrollbar-width:none; -ms-overflow-style:none;";
       
       const style = document.createElement("style");
       style.textContent = `.llp-scroll::-webkit-scrollbar { display: none !important; }`;
@@ -139,6 +139,14 @@ app.registerExtension({
       uiOverlay.appendChild(btnClose);
       uiOverlay.appendChild(indicator);
       singleView.appendChild(uiOverlay);
+
+      container.addEventListener("pointerdown", (e) => {
+        // 阻止事件冒泡到画布：否则画布会把这次点击当成点击空白区域，从而取消节点的选中状态
+        e.stopPropagation();
+        if (e.button === 0 && app.canvas && typeof app.canvas.selectNode === "function") {
+          app.canvas.selectNode(node);
+        }
+      });
 
       container.appendChild(gridView);
       container.appendChild(singleView);
@@ -230,7 +238,9 @@ app.registerExtension({
         
         singleImg.src = api.apiURL(`/view?filename=${encodeURIComponent(meta.filename)}&subfolder=${encodeURIComponent(meta.subfolder)}&type=${meta.type}&rand=${Date.now()}`);
         singleImg.onload = () => {
-          currentRatio = singleImg.naturalWidth / singleImg.naturalHeight;
+          const w = singleImg.naturalWidth;
+          const h = singleImg.naturalHeight;
+          currentRatio = w / h;
           
           // 大图模式：高度/宽度自适应，不拉伸
           if (currentRatio < 1) {
@@ -249,7 +259,7 @@ app.registerExtension({
           
           // 根据方向设置初始滚动位置
           if (node._llpScrollDir === "从右向左" && currentRatio > 1) {
-            singleScroll.scrollLeft = singleScroll.scrollWidth;
+            singleScroll.scrollLeft = singleScroll.scrollWidth - singleScroll.clientWidth;
           }
           
           updateMasks();
@@ -314,6 +324,11 @@ app.registerExtension({
           return;
         }
 
+        if (node._llpItems.length === 1) {
+          enterViewMode(0);
+          return;
+        }
+
         // 强制先退回网格模式
         node._llpViewMode = "grid";
         gridView.style.display = "flex";
@@ -339,11 +354,9 @@ app.registerExtension({
 
           const handleClick = (e) => {
             e.preventDefault();
-            e.stopPropagation();
             enterViewMode(index);
           };
 
-          cell.addEventListener("pointerdown", (e) => e.stopPropagation());
           cell.addEventListener("click", handleClick);
           grid.appendChild(cell);
 

@@ -10,6 +10,7 @@ import folder_paths
 
 
 class SaveSelectedFromBatch:
+    DISPLAY_NAME = "从批次中选择保存图片"
     _VALID_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
     _PREFIX = "SaveSelectedFromBatch"
 
