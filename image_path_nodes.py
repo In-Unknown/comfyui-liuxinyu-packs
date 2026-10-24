@@ -17,6 +17,9 @@ import numpy as np
 import torch
 from PIL import Image
 import folder_paths
+from liuxinyu_cache import (
+    cached_preview, file_changes, file_digest, preview_path, rebuilding_preview, save_source_preview, source_previews,
+)
 
 
 if os.name == "nt":
@@ -266,6 +269,7 @@ class SaveImageToAbsolutePath:
         }}
 
     RETURN_TYPES = ()
+    INPUT_IS_LIST = True
     FUNCTION = "save"
     OUTPUT_NODE = True
     CATEGORY = "image"
@@ -290,7 +294,16 @@ class SaveImageToAbsolutePath:
         else:
             img.save(path, format="PNG")
 
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("nan")
+
     def save(self, image, folder, filename, overwrite=True):
+        return cached_preview("SaveImageToAbsolutePath", dict(
+            image=image, folder=folder, filename=filename, overwrite=overwrite,
+        ), self._save)
+
+    def _save(self, image, folder, filename, overwrite=True):
         folder = os.path.normpath(folder.strip())
         filename = filename.strip()
         if not folder:
@@ -310,9 +323,6 @@ class SaveImageToAbsolutePath:
         ext = suffix.lower()
         batch_size = image.shape[0]
 
-        preview_dir = Path(folder_paths.get_temp_directory())
-        preview_dir.mkdir(parents=True, exist_ok=True)
-
         if batch_size == 1:
             path = Path(folder) / filename
             if not overwrite and (path.exists() or (Path(folder) / stem).exists()):
@@ -324,13 +334,13 @@ class SaveImageToAbsolutePath:
                         path = candidate
                         break
                     counter += 1
-            path.parent.mkdir(parents=True, exist_ok=True)
-
             img = self._to_pil(image[0], ext)
-            self._save_image(img, path, ext)
+            if not rebuilding_preview():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                self._save_image(img, path, ext)
 
-            preview_name = f"SaveImageToAbsolutePath_{os.getpid()}_{id(image)}.png"
-            img.save(preview_dir / preview_name, format="PNG")
+            preview_name = f"SaveImageToAbsolutePath_{uuid.uuid4().hex}.png"
+            img.save(preview_path(preview_name), format="PNG")
 
             return {
                 "ui": {
@@ -355,16 +365,18 @@ class SaveImageToAbsolutePath:
                     stem = candidate_name
                     break
                 counter += 1
-        subfolder.mkdir(parents=True, exist_ok=True)
+        if not rebuilding_preview():
+            subfolder.mkdir(parents=True, exist_ok=True)
 
         ui_images = []
         for i in range(batch_size):
             file_path = subfolder / f"{stem}-{str(i + 1).zfill(digits)}{suffix}"
             img = self._to_pil(image[i], ext)
-            self._save_image(img, file_path, ext)
+            if not rebuilding_preview():
+                self._save_image(img, file_path, ext)
 
-            preview_name = f"SaveImageToAbsolutePath_{os.getpid()}_{id(image)}_{i}.png"
-            img.save(preview_dir / preview_name, format="PNG")
+            preview_name = f"SaveImageToAbsolutePath_{uuid.uuid4().hex}_{i}.png"
+            img.save(preview_path(preview_name), format="PNG")
             ui_images.append({
                 "filename": preview_name,
                 "subfolder": "",
@@ -388,13 +400,23 @@ class LoadImageFromPath:
         }}
 
     RETURN_TYPES = ("IMAGE", "INT", "INT")
+    INPUT_IS_LIST = True
+    OUTPUT_IS_LIST = (True, True, True)
     RETURN_NAMES = ("图片", "宽度", "高度")
     FUNCTION = "execute"
     OUTPUT_NODE = True
     CATEGORY = "image"
     DESCRIPTION = "LoadImageFromPath 节点从指定的绝对路径加载图片文件，输出为 IMAGE 类型及图片的宽度和高度。节点上会显示已加载图片的预览。"
 
+    @classmethod
+    def IS_CHANGED(cls, path):
+        return file_changes.fingerprint("LoadImageFromPath", path)
+
     def execute(self, path):
+        return source_previews("LoadImageFromPath", path, self._load, 3)
+
+    def _load(self, path):
+        file_changes.remember("LoadImageFromPath", path)
         path = path.strip()
         if not path or not os.path.isfile(path):
             raise ValueError(f"文件不存在：{path}")
@@ -411,20 +433,12 @@ class LoadImageFromPath:
         image = np.array(img).astype(np.float32) / 255.0
         image = torch.from_numpy(image)[None,]
 
-        preview_dir = Path(folder_paths.get_temp_directory())
-        preview_dir.mkdir(parents=True, exist_ok=True)
-        preview_name = f"LoadImageFromPath_{os.getpid()}_{hash(path)}.png"
-        preview_path = preview_dir / preview_name
-        img.save(preview_path, format="PNG")
+        preview = save_source_preview(img, "LoadImageFromPath")
 
         return {
             "result": (image, w, h),
             "ui": {
-                "images": [{
-                    "filename": preview_name,
-                    "subfolder": "",
-                    "type": "temp",
-                }],
+                "images": [preview],
             },
         }
 
@@ -436,15 +450,15 @@ class LoadImageBatchFromPath:
         return {"required": {
             "path": ("STRING", {"default": "", "multiline": False, "display_name": "图像路径", "tooltip": "支持文件夹（递归）、单张图片或 CSV 多图片路径。传入目标宽高时直接拉伸或压缩至指定尺寸；不传时要求图片比例完全一致，并放大到像素最多的图片尺寸。动图和多页图片仅加载第一帧。"}),
         }, "optional": {
-            "target_width": ("INT", {"display_name": "目标宽度", "default": 0, "min": 0, "max": 2147483647, "tooltip": "像素宽度，可直接填写或连接整数。与目标高度一起设为正整数；两项均为 0 时使用原有比例规则。"}),
-            "target_height": ("INT", {"display_name": "目标高度", "default": 0, "min": 0, "max": 2147483647, "tooltip": "像素高度，可直接填写或连接整数。与目标宽度一起设为正整数，直接改变比例，不裁剪、不补边。"}),
+            "target_width": ("INT", {"display_name": "目标宽度", "default": 0, "min": 0, "max": 2147483647, "tooltip": "像素宽度，可直接填写或连接整数。与高度同时大于 0 时直接拉伸到该尺寸；仅宽度大于 0 时按第一张图比例等比算出高度；两项均为 0 时使用原有比例规则。"}),
+            "target_height": ("INT", {"display_name": "目标高度", "default": 0, "min": 0, "max": 2147483647, "tooltip": "像素高度，可直接填写或连接整数。与宽度同时大于 0 时直接拉伸到该尺寸；仅高度大于 0 时按第一张图比例等比算出宽度；两项均为 0 时使用原有比例规则。"}),
         }}
 
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("图像批次",)
     FUNCTION = "execute"
     CATEGORY = "image"
-    DESCRIPTION = "从路径加载图像批次。传入目标宽高时，全部图片直接拉伸或压缩到指定尺寸，不裁剪、不补边；不传时，选图后检查全部图片的比例，比例一致则统一放大到最大图片尺寸，不一致则提示错误。目标尺寸来自上游计算时，选图阶段显示原图预览，运行时按实际尺寸缩放。"
+    DESCRIPTION = "从路径加载图像批次。宽高均大于 0 时直接拉伸到指定尺寸；仅指定一边时按第一张图比例等比算出另一边；均不指定时检查全部图片比例，一致则统一放大到最大图片尺寸，不一致则提示错误。不裁剪、不补边。目标尺寸来自上游计算时，选图阶段显示原图预览，运行时按实际尺寸缩放。"
 
     @staticmethod
     def _target_size(target_width=0, target_height=0):
@@ -452,9 +466,22 @@ class LoadImageBatchFromPath:
             raise ValueError("目标宽度和目标高度必须为整数。")
         if target_width == 0 and target_height == 0:
             return None
-        if target_width <= 0 or target_height <= 0:
-            raise ValueError("请同时传入大于 0 的目标宽度和目标高度；不指定尺寸时两项均不传或均为 0。")
+        if target_width < 0 or target_height < 0:
+            raise ValueError("目标宽度和目标高度不能为负数。")
         return (target_width, target_height)
+
+    @staticmethod
+    def _fill_missing_side(target, base_w, base_h):
+        if target is None:
+            return None
+        tw, th = target
+        if tw == 0 and th == 0:
+            return None
+        if tw == 0:
+            return (max(1, round(base_w * th / base_h)), th)
+        if th == 0:
+            return (tw, max(1, round(base_h * tw / base_w)))
+        return (tw, th)
 
     @staticmethod
     def _parse_paths(path):
@@ -494,11 +521,12 @@ class LoadImageBatchFromPath:
 
     @classmethod
     def IS_CHANGED(cls, path, target_width=0, target_height=0):
-        return float("nan")
+        return file_changes.fingerprint("LoadImageBatchFromPath", path, cls._resolve_paths)
 
     def execute(self, path, target_width=0, target_height=0):
         from PIL import ImageOps
 
+        file_changes.remember("LoadImageBatchFromPath", path, self._resolve_paths)
         target = self._target_size(target_width, target_height)
         paths = self._resolve_paths(path)
         images = []
@@ -522,6 +550,9 @@ class LoadImageBatchFromPath:
 
             if target is None:
                 target = max((img.size for img in images), key=lambda size: size[0] * size[1])
+            elif target[0] == 0 or target[1] == 0:
+                base_w, base_h = images[0].size
+                target = self._fill_missing_side(target, base_w, base_h)
             tensors = []
             for img in images:
                 if img.size == target:
@@ -545,6 +576,8 @@ class LoadPath:
         }}
 
     RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING")
+    INPUT_IS_LIST = True
+    OUTPUT_IS_LIST = (True, True, True, True)
     RETURN_NAMES = ("完整路径", "文件名", "无后缀文件名", "后缀")
     FUNCTION = "execute"
     OUTPUT_NODE = True
@@ -553,7 +586,15 @@ class LoadPath:
 
     _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tiff"}
 
+    @classmethod
+    def IS_CHANGED(cls, path):
+        return file_changes.fingerprint("LoadPath", path)
+
     def execute(self, path):
+        return source_previews("LoadPath", path, self._load, 4)
+
+    def _load(self, path):
+        file_changes.remember("LoadPath", path)
         path = path.strip()
         filename = os.path.basename(path) if path else ""
         if "." in filename:
@@ -570,15 +611,7 @@ class LoadPath:
                     img = ImageOps.exif_transpose(img)
                     if img is not None:
                         img = img.convert("RGB")
-                        preview_dir = Path(folder_paths.get_temp_directory())
-                        preview_dir.mkdir(parents=True, exist_ok=True)
-                        preview_name = f"LoadPath_{os.getpid()}_{hash(path)}.png"
-                        img.save(preview_dir / preview_name, format="PNG")
-                        ui["images"] = [{
-                            "filename": preview_name,
-                            "subfolder": "",
-                            "type": "temp",
-                        }]
+                        ui["images"] = [save_source_preview(img, "LoadPath")]
             except Exception:
                 pass
 
@@ -627,10 +660,13 @@ def _path_preview(data):
                 _remove_path_preview_files(_PATH_PREVIEW_SESSIONS.pop(oldest))
             entry = {"files": []}
             _PATH_PREVIEW_SESSIONS[session] = entry
-        _remove_path_preview_files(entry)
         entry.update(revision=revision, time=now)
         if data.get("clear") or not path.strip():
+            _remove_path_preview_files(entry)
+            entry.pop("signature", None)
+            entry.pop("result", None)
             return {"images": []}
+        pending = {"files": []}
         try:
             paths = (LoadImageBatchFromPath._resolve_paths(path)
                      if kind == "LoadImageBatchFromPath" else [Path(path.strip())])
@@ -642,6 +678,10 @@ def _path_preview(data):
                     target = LoadImageBatchFromPath._target_size(
                         data.get("target_width", 0), data.get("target_height", 0),
                     )
+            signature = (kind, path, target, dimensions_pending, file_digest(paths))
+            if (entry.get("signature") == signature
+                    and all(file.is_file() for file in entry["files"])):
+                return entry["result"]
             output = []
             temp = Path(folder_paths.get_temp_directory())
             temp.mkdir(parents=True, exist_ok=True)
@@ -669,14 +709,21 @@ def _path_preview(data):
                             with corrected.convert("RGB") as rgb:
                                 preview_size = rgb.size
                                 if target is not None:
-                                    scale = min(512 / target[0], 512 / target[1], 1)
-                                    preview_size = (max(1, round(target[0] * scale)), max(1, round(target[1] * scale)))
+                                    if target[0] == 0 or target[1] == 0:
+                                        ptw, pth = LoadImageBatchFromPath._fill_missing_side(target, first_width, first_height)
+                                    else:
+                                        ptw, pth = target
+                                    scale = min(512 / ptw, 512 / pth, 1)
+                                    preview_size = (max(1, round(ptw * scale)), max(1, round(pth * scale)))
                                 preview_file = temp / f"path_preview_{uuid.uuid4().hex}.jpg"
-                                entry["files"].append(preview_file)
+                                pending["files"].append(preview_file)
                                 with rgb.resize(preview_size, Image.Resampling.LANCZOS) as image:
                                     image.save(preview_file, format="JPEG", quality=85)
                 except UnidentifiedImageError as error:
                     if kind == "LoadPath":
+                        _remove_path_preview_files(entry)
+                        entry.pop("signature", None)
+                        entry.pop("result", None)
                         return {"images": []}
                     raise ValueError(f"无法加载图片（损坏或不支持）：{item}") from error
                 except (OSError, ValueError) as error:
@@ -685,9 +732,11 @@ def _path_preview(data):
             result = {"images": output, "total": len(paths)}
             if len(paths) > _PATH_PREVIEW_LIMIT:
                 result["warning"] = f"仅预览前 {_PATH_PREVIEW_LIMIT} 张，共 {len(paths)} 张；工作流仍加载全部图片。"
+            _remove_path_preview_files(entry)
+            entry.update(files=pending["files"], signature=signature, result=result)
             return result
         except Exception:
-            _remove_path_preview_files(entry)
+            _remove_path_preview_files(pending)
             raise
 
 
@@ -711,3 +760,189 @@ def _cleanup_path_previews():
 import atexit
 atexit.register(_cleanup_path_previews)
 PromptServer.instance.routes.post("/save_image_to_path/preview_path")(_preview_path)
+
+
+class LoadDirectory:
+    DISPLAY_NAME = "加载目录"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "path": ("STRING", {"default": "", "multiline": False, "display_name": "文件夹路径", "tooltip": "文件夹的绝对路径。可点击下方的「选择文件夹」按钮调用系统原生对话框进行选择，也可手动输入。"}),
+        }}
+
+    RETURN_TYPES = ("STRING", "STRING", "STRING")
+    RETURN_NAMES = ("完整路径", "文件夹名", "父目录")
+    FUNCTION = "execute"
+    CATEGORY = "image"
+    DESCRIPTION = "从指定目录读取路径信息，输出完整路径、文件夹名及父目录。"
+
+    def execute(self, path):
+        path = path.strip()
+        if not path:
+            return ("", "", "")
+
+        p = Path(path)
+        parent = "" if p.parent == p else str(p.parent)
+        return (path, p.name, parent)
+
+
+class MatchPath:
+    DISPLAY_NAME = "从目录中匹配路径或目录"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "directory": ("STRING", {"default": "", "multiline": False, "display_name": "目录路径", "tooltip": "要搜索的文件夹的绝对路径。可点击下方的「选择文件夹」按钮选择。"}),
+                "match_mode": (["字符串匹配", "正则表达式", "文件属性布尔表达式"], {"default": "字符串匹配", "display_name": "匹配模式"}),
+                "match_text": ("STRING", {"default": "", "multiline": False, "display_name": "匹配内容", "tooltip": "字符串匹配：包含的文本；正则表达式：正则模式；属性布尔表达式：如 size > 1024 或 suffix == '.png' 或 'R20' in name"}),
+                "match_target": (["文件", "目录", "文件和目录"], {"default": "文件", "display_name": "匹配对象"}),
+                "recursive": ("BOOLEAN", {"default": True, "display_name": "是否递归"}),
+                "match_full_path": ("BOOLEAN", {"default": False, "display_name": "匹配完整路径", "tooltip": "关闭时只匹配名称（含扩展名）；开启时对完整路径做匹配，可用于按目录结构筛选。"}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("路径数组",)
+    OUTPUT_IS_LIST = (True,)
+    FUNCTION = "execute"
+    CATEGORY = "image"
+    DESCRIPTION = "从指定目录下匹配符合条件的文件或目录。支持字符串包含、正则表达式，以及基于文件系统属性（名称、大小、修改时间、扩展名等）的布尔表达式。字符串和正则默认只匹配名称，可开启「匹配完整路径」改为对整条路径匹配。"
+
+    @classmethod
+    def IS_CHANGED(cls, directory, **kwargs):
+        return file_changes.fingerprint("MatchPath", directory)
+
+    def execute(self, directory, match_mode, match_text, match_target, recursive, match_full_path=False):
+        file_changes.remember("MatchPath", directory)
+        import re
+        import datetime
+        import os
+        from pathlib import Path
+
+        directory = directory.strip()
+        if not directory or not os.path.isdir(directory):
+            return ([],)
+
+        results = []
+        root = Path(directory)
+
+        def get_meta(p: Path):
+            meta = {
+                "name": p.name,
+                "stem": p.stem,
+                "suffix": p.suffix,
+                "suffix_lower": p.suffix.lower(),
+                "path": str(p),
+                "is_file": p.is_file(),
+                "is_dir": p.is_dir(),
+            }
+            try:
+                st = p.stat()
+                meta["size"] = st.st_size
+                meta["size_kb"] = round(st.st_size / 1024, 2)
+                meta["size_mb"] = round(st.st_size / 1024 / 1024, 2)
+                meta["mtime"] = st.st_mtime
+                meta["mtime_str"] = datetime.datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                meta["atime_str"] = datetime.datetime.fromtimestamp(st.st_atime).strftime("%Y-%m-%d %H:%M:%S")
+                meta["ctime_str"] = datetime.datetime.fromtimestamp(st.st_ctime).strftime("%Y-%m-%d %H:%M:%S")
+                if hasattr(st, "st_file_attributes"):
+                    meta["is_hidden"] = bool(st.st_file_attributes & 2)
+                else:
+                    meta["is_hidden"] = p.name.startswith(".")
+            except Exception:
+                pass
+
+            return meta
+
+        def should_include(p: Path):
+            if p.is_dir() and match_target == "文件":
+                return False
+            if p.is_file() and match_target == "目录":
+                return False
+
+            target = str(p) if match_full_path else p.name
+
+            if match_mode == "字符串匹配":
+                return match_text in target
+
+            elif match_mode == "正则表达式":
+                try:
+                    return bool(re.search(match_text, target))
+                except re.error:
+                    return False
+
+            elif match_mode == "文件属性布尔表达式":
+                meta = get_meta(p)
+                expr = match_text.strip()
+                if expr.startswith("."):
+                    expr = expr[1:]
+                if not expr:
+                    return False
+                try:
+                    return bool(eval(expr, {"__builtins__": {}}, meta))
+                except Exception:
+                    return False
+
+            return False
+
+        try:
+            if recursive:
+                for p in root.rglob("*"):
+                    if should_include(p):
+                        results.append(str(p))
+            else:
+                for p in root.glob("*"):
+                    if should_include(p):
+                        results.append(str(p))
+        except Exception:
+            pass
+
+        return (results,)
+
+
+class ResolveRelativePath:
+    DISPLAY_NAME = "在绝对路径中的相对路径"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "absolute_path": ("STRING", {
+                    "default": "",
+                    "forceInput": True,
+                    "display_name": "绝对路径",
+                    "tooltip": "作为基准的绝对路径。需要连接上游的字符串输出。",
+                }),
+                "relative_path": ("STRING", {
+                    "default": "",
+                    "multiline": False,
+                    "display_name": "相对路径",
+                    "tooltip": "相对于基准路径的部分，支持 .. 和 .，也支持多级嵌套。可直接填写，也可连接上游字符串。",
+                }),
+            }
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("绝对路径",)
+    FUNCTION = "execute"
+    CATEGORY = "utils/path"
+    DESCRIPTION = "把相对路径拼接到绝对路径上，并规范化结果（处理 . 和 ..）。不检查路径是否真实存在，仅做字符串层面的路径计算。"
+
+    def execute(self, absolute_path, relative_path):
+        import os
+
+        absolute_path = (absolute_path or "").strip()
+        relative_path = (relative_path or "").strip()
+
+        if not absolute_path:
+            return ("",)
+        if not relative_path:
+            return (os.path.normpath(absolute_path),)
+
+        try:
+            joined = os.path.join(absolute_path, relative_path)
+            return (os.path.normpath(joined),)
+        except Exception:
+            return ("",)

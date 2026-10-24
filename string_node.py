@@ -10,6 +10,7 @@ from itertools import product
 from pathlib import Path
 
 from comfy_api.latest import io
+from liuxinyu_cache import file_changes
 
 
 TemplateParameters = io.Custom("LIUXINYU_TEMPLATE_PARAMETERS")
@@ -169,7 +170,7 @@ class LiuxinyuLoadTextFile(io.ComfyNode):
             display_name="从文本文件中获取字符串",
             category="utils/string",
             description=(
-                "通过路径读取文本文件，可使用选择文件按钮。每次运行重新读取文件。"
+                "通过路径读取文本文件，可使用选择文件按钮。文件内容不变时复用缓存，修改后自动重新读取。"
                 "优先读取 UTF-8，识别带 BOM 的 UTF-16/32，非 UTF-8 时尝试 GB18030（兼容 GBK）。"
                 "输出保留原有空格、换行，不包含编码 BOM，也不将文本中的反斜杠解释为转义。"
                 "字符总数按 Unicode 码点计数，包含换行字符（CRLF 占两个字符）。"
@@ -186,10 +187,11 @@ class LiuxinyuLoadTextFile(io.ComfyNode):
 
     @classmethod
     def fingerprint_inputs(cls, path):
-        return float("nan")
+        return file_changes.fingerprint("LiuxinyuLoadTextFile", path)
 
     @classmethod
     def execute(cls, path):
+        file_changes.remember("LiuxinyuLoadTextFile", path)
         filename = path.strip()
         if len(filename) >= 2 and filename[0] == filename[-1] == '"':
             filename = filename[1:-1]

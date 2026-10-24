@@ -1,8 +1,9 @@
 """数字转换节点。"""
 
 from decimal import Decimal
-from numbers import Number
+from numbers import Integral, Number, Real
 import codecs
+import json
 import math
 import re
 
@@ -49,9 +50,9 @@ def _literal_parts(text):
                 quote = None
         elif character in _LITERAL_QUOTES:
             quote = _LITERAL_QUOTES[character]
-        elif character == "[":
+        elif character in "[{":
             depth += 1
-        elif character == "]":
+        elif character in "]}":
             depth -= 1
             if depth < 0:
                 raise ValueError("括号不匹配")
@@ -64,8 +65,14 @@ def _literal_parts(text):
     return parts
 
 
+def _reject_json_constant(value):
+    raise ValueError(f"JSON 不支持 {value}。")
+
+
 def _parse_literal(text):
     stripped = text.strip()
+    if stripped.startswith("{"):
+        return json.loads(stripped, parse_constant=_reject_json_constant), "对象"
     bracketed = stripped.startswith("[")
     if bracketed:
         if not stripped.endswith("]"):
@@ -118,23 +125,66 @@ class LiuxinyuStringToLiteral(io.ComfyNode):
             display_name="字符串转为字面量",
             category="utils/conversion",
             description=(
-                "解析整数、双精度浮点数、十六进制颜色及逗号分隔数组（可带方括号）。"
+                "解析整数、双精度浮点数、十六进制颜色、JSON 对象及逗号分隔数组（可带方括号）。"
+                "支持 [0.1, 0.2] 和 [{\"percent\": 10}, {\"percent\": 20}]，也可包在完整的 Markdown JSON 代码块中。"
                 "中英文引号包裹的内容始终是字符串。支持反斜杠转义；字面反斜杠请写成两个。"
-                "普通文本或不成立的格式回退为字符串。数组按执行列表输出，普通下游逐项运行；"
-                "标量输出为一项。颜色以十六进制字符串传递，运行后在节点底部显示类型。"
+                "普通文本或不成立的格式回退为字符串。原“字面量”输出把数组展开为执行列表，普通下游逐项运行；标量输出为一项。"
+                "新增“完整字面量”输出保留完整数组或对象，请使用此输出连接切分数组。"
+                "颜色以十六进制字符串传递，运行后在节点底部显示类型。"
             ),
             inputs=[io.String.Input("text", display_name="字符串", default="", multiline=True)],
-            outputs=[io.AnyType.Output(display_name="字面量", is_output_list=True)],
+            outputs=[
+                io.AnyType.Output(display_name="字面量", is_output_list=True),
+                io.AnyType.Output(display_name="完整字面量"),
+            ],
         )
 
     @classmethod
     def execute(cls, text):
+        literal = text
+        fenced = re.fullmatch(r"```(?:json)?[ \t]*\r?\n(.*?)\r?\n[ \t]*```", text.strip(), re.IGNORECASE | re.DOTALL)
+        if fenced:
+            literal = fenced.group(1)
         try:
-            value, kind = _parse_literal(text)
+            value, kind = _parse_literal(literal)
         except (ValueError, OverflowError, UnicodeError, RecursionError):
             value, kind = text, "字符串"
-        return io.NodeOutput(value if isinstance(value, list) else [value],
+        return io.NodeOutput(value if isinstance(value, list) else [value], value,
                              ui={"liuxinyu_literal_type": [kind]})
+
+
+class LiuxinyuNumberArray(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="LiuxinyuNumberArray",
+            display_name="多个数值组成数组",
+            category="utils/conversion",
+            search_aliases=["数值数组", "整数数组", "浮点数组", "number array"],
+            description=(
+                "按输入口从上到下的顺序组成一个数组，连接末尾输入后自动增加输入口。"
+                "全部为整数时输出整数数组；含浮点数时全部转为浮点数。"
+                "未连接的输入不占数组位置，没有输入时输出空数组。"
+            ),
+            inputs=[io.MultiType.Input(
+                io.Float.Input("number0", force_input=True, optional=True),
+                types=[io.Int, io.Float], display_name="数值 1",
+                tooltip="连接整数或浮点数；连接后自动增加下一个输入口。",
+            )],
+            outputs=[io.Array.Output(display_name="数值数组")],
+            accept_all_inputs=True,
+        )
+
+    @classmethod
+    def execute(cls, **numbers):
+        for name, value in numbers.items():
+            if not re.fullmatch(r"number[0-9]+", name):
+                raise ValueError(f"未知数值输入口：{name}")
+            if isinstance(value, bool) or not isinstance(value, Real):
+                raise ValueError(f"{name} 只能输入整数或浮点数，收到 {type(value).__name__}。")
+        values = [value for _, value in sorted(numbers.items(), key=lambda item: int(item[0][6:]))]
+        convert = int if all(isinstance(value, Integral) for value in values) else float
+        return io.NodeOutput([convert(value) for value in values])
 
 
 class LiuxinyuNumberToString(io.ComfyNode):

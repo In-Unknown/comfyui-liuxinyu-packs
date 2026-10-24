@@ -7,9 +7,16 @@ NODE_DISPLAY_NAME_MAPPINGS = {}
 
 current_dir = os.path.dirname(__file__)
 
+# Shared helper uses the same import name in ComfyUI and standalone tests.
+if "liuxinyu_cache" not in sys.modules:
+    cache_spec = importlib.util.spec_from_file_location("liuxinyu_cache", os.path.join(current_dir, "liuxinyu_cache.py"))
+    cache_module = importlib.util.module_from_spec(cache_spec)
+    sys.modules["liuxinyu_cache"] = cache_module
+    cache_spec.loader.exec_module(cache_module)
+
 # 自动扫描当前目录下的所有 .py 文件并加载节点
 for filename in sorted(os.listdir(current_dir)):
-    if not filename.endswith(".py") or filename.startswith("__"):
+    if not filename.endswith(".py") or filename.startswith("__") or filename == "liuxinyu_cache.py":
         continue
     
     module_name = filename[:-3]

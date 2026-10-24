@@ -1,5 +1,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { SmoothImageGrid } from "./smooth_image_grid.js";
+import { enablePreviewResize } from "./preview_resize.js";
 
 // Adapter for the installed ComfyUI frontend 1.53.6 issue panel.
 const previewErrorBridge = import("/assets/settingStore-DDHzGrHr.js")
@@ -25,19 +27,23 @@ function injectBatchStyles() {
 .sitp-batch-grid {
   display: flex;
   justify-content: center;
-  align-items: center;
+  align-items: flex-start;
   width: 100%;
   height: 100%;
   box-sizing: border-box;
   background: transparent;
+  overflow: hidden;
 }
 .sitp-batch-inner {
   display: grid;
   gap: 0;
+  flex: none;
   box-sizing: border-box;
 }
 .sitp-batch-cell {
   position: relative;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
   box-sizing: border-box;
   cursor: pointer;
@@ -64,26 +70,6 @@ function injectBatchStyles() {
 .sitp-batch-cell.sitp-selected .sitp-batch-tint {
   background: rgba(76, 175, 80, 0.35);
   border: 3px solid rgba(76, 175, 80, 0.95);
-}
-.sitp-batch-cell .sitp-batch-check {
-  position: absolute;
-  left: 6px;
-  top: 6px;
-  width: 20px;
-  height: 20px;
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.55);
-  border: 1.5px solid rgba(255, 255, 255, 0.9);
-  color: #fff;
-  font: 700 14px/20px sans-serif;
-  text-align: center;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 60ms linear;
-}
-.sitp-batch-cell.sitp-selected .sitp-batch-check {
-  opacity: 1;
-  background: rgba(76, 175, 80, 0.95);
 }
 `;
   document.head.appendChild(style);
@@ -122,6 +108,8 @@ app.registerExtension({
     } else if (node.comfyClass === LOAD_PATH_NODE || node.comfyClass === "LoadImageFromPath") {
       setupFilePicker(node);
       setupPathPreview(node);
+    } else if (node.comfyClass === "LoadDirectory" || node.comfyClass === "MatchPath") {
+      setupDirectoryPicker(node, node.comfyClass === "MatchPath" ? "directory" : "path");
     } else if (node.comfyClass === "LiuxinyuLoadTextFile") {
       setupFilePicker(node);
     } else if (node.comfyClass === BATCH_NODE) {
@@ -346,6 +334,28 @@ function setupFolderPicker(node) {
   node.setDirtyCanvas(true, true);
 }
 
+function setupDirectoryPicker(node, widgetName = "path") {
+  const path = node.widgets?.find((w) => w.name === widgetName);
+  if (!path || path.__dirPicker) return;
+  path.__dirPicker = true;
+
+  const button = node.addWidget(
+    "button",
+    "选择文件夹",
+    "save_image_to_path_select_folder",
+    async () => {
+      await openFolderPicker(path);
+    },
+    {
+      serialize: false,
+      canvasOnly: true,
+    },
+  );
+  button.label = "选择文件夹";
+  moveWidgetAfter(node, button, widgetName);
+  node.setDirtyCanvas(true, true);
+}
+
 function setupImageBatchPicker(node) {
   const path = node.widgets?.find((w) => w.name === "path");
   if (!path || path.__imageBatchPicker) return;
@@ -422,7 +432,7 @@ function setupBatchSelector(node) {
     container: null,
     inner: null,
     domWidget: null,
-    ro: null,
+    gallery: null,
   };
   node._batchState = state;
 
@@ -445,58 +455,53 @@ function setupBatchSelector(node) {
   const container = document.createElement("div");
   container.className = "sitp-batch-grid";
   state.container = container;
+  state.gallery = new SmoothImageGrid(container, app, api, {
+    onClick(index) {
+      if (state.selected.has(index)) state.selected.delete(index);
+      else state.selected.add(index);
+      state.gallery.entries[index].cell.classList.toggle("sitp-selected", state.selected.has(index));
+      syncSelectionWidget(node, Array.from(state.selected).sort((a, b) => a - b).join(","));
+      updateButtonLabel(node);
+    },
+  });
+  state.inner = state.gallery.grid;
 
   const domWidget = node.addDOMWidget("sitp_batch_preview", "custom", container, {
     hideOnZoom: false,
+    margin: 0,
     getMinHeight: () => 220,
+    onDraw: widget => { widget.width = undefined; drawBatchPreview(); },
+    afterResize: () => relayoutBatchGrid(node),
   });
   // 注意：addDOMWidget 不会把 options.serialize 挂到实例上，
   // 必须手动设置，否则保存工作流时会多写一个空串占位导致加载时值错位。
   domWidget.serialize = false;
   state.domWidget = domWidget;
+  enablePreviewResize(node, domWidget);
 
   // 槽位顺序：folder / 选择文件夹 / filename / 保存所选 / selection / 预览网格
   moveWidgetAfter(node, button, "filename");
   moveWidgetAfter(node, domWidget, "selection");
 
-  // 容器尺寸变化时重新布局（debounce：选中/取消选中瞬间核心会改变节点边框，
-  // 导致 container 尺寸连续跳变，直接 relayout 会捕获过渡态尺寸）
-  let relayoutRaf = null;
-  const scheduleRelayout = () => {
-    if (relayoutRaf) cancelAnimationFrame(relayoutRaf);
-    relayoutRaf = requestAnimationFrame(() => {
-      relayoutRaf = null;
-      try {
-        relayoutBatchGrid(node);
-      } catch (e) {
-        console.error("[SaveImageToPath] relayout failed:", e);
-      }
-    });
-  };
-  state.ro = new ResizeObserver(scheduleRelayout);
-  state.ro.observe(container);
-  // 同时观察父元素：container.style.width 被显式设置后会脱离 100% 约束，
-  // 节点缩窄时 container 自身不变化、ResizeObserver 不触发。
-  // 观察父元素可捕获父元素尺寸变化，重新读取 node.size[0] 并更新 container 宽度。
-  if (container.parentElement) {
-    state.ro.observe(container.parentElement);
+  function drawBatchPreview() {
+    state.gallery.draw(String(node.pos));
+    const saved = app.nodeOutputs?.[node.id];
+    if (saved?.images && saved !== state.canvasOutput) {
+      state.canvasOutput = saved;
+      onBatchExecuted(node, saved);
+    }
   }
-
-  // 选中/取消选中时，核心改变节点边框导致 DOM widget 区域尺寸变化。
-  // 在下一帧（边框已稳定）再触发一次 relayout，确保使用最终尺寸。
-  const origOnSelected = node.onSelected;
-  node.onSelected = function () {
-    origOnSelected?.call(this);
-    scheduleRelayout();
-  };
-  const origOnDeselected = node.onDeselected;
-  node.onDeselected = function () {
-    origOnDeselected?.call(this);
-    scheduleRelayout();
+  // Suppressing imgs alone still lets core decode every original PNG.
+  node.onDrawBackground = drawBatchPreview;
+  const onRemoved = node.onRemoved;
+  node.onRemoved = function () {
+    state.gallery.dispose();
+    return onRemoved?.apply(this, arguments);
   };
 
-  // 在 DOM 区域滚轮应转发给画布（缩放/平移），而不是被吞掉
-  forwardCanvasGestures(container);
+  container.addEventListener("pointerdown", (e) => {
+    if (e.button === 1) { e.preventDefault(); app.canvas?.processMouseDown?.(e); }
+  });
 
   // 阻止核心创建 canvas 图片预览 widget（$$canvas-image-preview）。
   // 核心流程：dispatch 把 result 写入 store.nodeOutputs → useNodeImage 异步加载
@@ -536,211 +541,41 @@ function onBatchExecuted(node, result) {
   const metas = result?.images;
   if (!Array.isArray(metas)) return;
 
+  const signature = JSON.stringify(metas.map((meta) => [meta.filename, meta.subfolder, meta.type]));
   state.imageMetas = metas;
   state.selected.clear();
-  syncSelectionWidget(node, "");
+  metas.forEach((meta, index) => {
+    if (meta.selected) state.selected.add(index);
+  });
   updateButtonLabel(node);
 
+  if (state.previewSignature === signature) {
+    state.inner?.querySelectorAll(".sitp-batch-cell").forEach((cell) => {
+      cell.classList.toggle("sitp-selected", state.selected.has(Number(cell.dataset.index)));
+    });
+    return;
+  }
+  state.previewSignature = signature;
   renderBatchCells(node, metas);
   relayoutBatchGrid(node);
 }
 
 function renderBatchCells(node, metas) {
   const state = node._batchState;
-  const container = state.container;
-  container.replaceChildren();
-
-  // 内层容器：固定宽高，承载图片排列；外层 flex 居中内层
-  const inner = document.createElement("div");
-  inner.className = "sitp-batch-inner";
-  state.inner = inner;
-
-  metas.forEach((meta, i) => {
-    const cell = document.createElement("div");
-    cell.className = "sitp-batch-cell";
-    cell.dataset.index = String(i);
-
-    const img = document.createElement("img");
-    img.alt = `preview ${i + 1}`;
-    img.src = buildViewUrl(meta);
-    img.onerror = () => {
-      console.error("[SaveImageToPath] preview load failed:", meta);
-    };
-    img.onload = () => {
-      relayoutBatchGrid(node);
-    };
-
-    const tint = document.createElement("div");
-    tint.className = "sitp-batch-tint";
-    const check = document.createElement("div");
-    check.className = "sitp-batch-check";
-    check.textContent = "✓";
-
-    cell.appendChild(img);
-    cell.appendChild(tint);
-    cell.appendChild(check);
-
-    cell.addEventListener("click", () => {
-      if (state.selected.has(i)) {
-        state.selected.delete(i);
-        cell.classList.remove("sitp-selected");
-      } else {
-        state.selected.add(i);
-        cell.classList.add("sitp-selected");
-      }
-      syncSelectionWidget(
-        node,
-        Array.from(state.selected)
-          .sort((a, b) => a - b)
-          .join(","),
-      );
-      updateButtonLabel(node);
-    });
-
-    inner.appendChild(cell);
+  state.gallery.setImages(metas);
+  state.gallery.entries.forEach(({ cell }, index) => {
+    cell.classList.add("sitp-batch-cell");
+    cell.classList.toggle("sitp-selected", state.selected.has(index));
+    if (!cell.querySelector(".sitp-batch-tint")) {
+      const tint = document.createElement("div");
+      tint.className = "sitp-batch-tint";
+      cell.appendChild(tint);
+    }
   });
-
-  container.appendChild(inner);
-}
-
-function buildViewUrl(meta) {
-  const params = new URLSearchParams();
-  params.set("filename", meta.filename ?? "");
-  if (meta.subfolder) params.set("subfolder", meta.subfolder);
-  if (meta.type) params.set("type", meta.type);
-  return `/view?${params.toString()}`;
-}
-
-// 排布函数（数学形式化）：把 N 张同尺寸图片无缝排进 W×H 画板，输出 (s, m, n)。
-//   s: 每张图片的等比缩放因子；m: 每行个数；n: 行数（n = N/m）。
-// 记号：画板比例 R = W/H，图片比例 r = w0/h0，比例比 R/r = p/q（互质整数比）。
-// 分支一（完美无缝填满）：若存在正整数 k 使 N = k²·p·q，
-//   则 m = k·p，n = k·q，s = W/(m·w0) = H/(n·h0)，整体正好 W×H 无缝无留白。
-// 分支二（非完美填满）：枚举 N 的所有正因子 m（n = N/m），
-//   外轮廓比例 S(m) = (m/n)·r = (m²/N)·r，
-//   对数误差 d(m) = |ln(S(m)/R)|，
-//   排序键 φ(m) = (d(m), |m-n|, -m)：误差小优先 → 网格接近正方形 → m 大（行优先）。
-//   s = min(W/(m*·w0), H/(n*·h0))，一边贴边，另一边由外层 flex 居中留白。
-function gcdInt(a, b) {
-  while (b) {
-    const t = a % b;
-    a = b;
-    b = t;
-  }
-  return a;
-}
-
-function computeBatchLayout(N, W, H, w0, h0) {
-  // 比例比 R/r = (W·h0)/(H·w0)，整数约分成互质 p/q
-  const num = W * h0;
-  const den = H * w0;
-  const g = gcdInt(num, den) || 1;
-  const p = num / g;
-  const q = den / g;
-  const pq = p * q;
-
-  // 分支一：完美无缝填满 N = k²·p·q
-  if (N % pq === 0) {
-    const k = Math.sqrt(N / pq);
-    if (Number.isInteger(k)) {
-      const m = k * p;
-      const n = k * q;
-      return { s: W / (m * w0), m, n };
-    }
-  }
-
-  // 分支二：枚举 N 的因子，选 φ(m) 最小者
-  const r = w0 / h0;
-  const R = W / H;
-  const EPS = 1e-9;
-  let best = null;
-  for (let m = 1; m <= N; m++) {
-    if (N % m !== 0) continue;
-    const n = N / m;
-    const d = Math.abs(Math.log((m * m * r) / N / R));
-    const diff = Math.abs(m - n);
-    if (
-      !best ||
-      d < best.d - EPS ||
-      (d <= best.d + EPS &&
-        (diff < best.diff || (diff === best.diff && m > best.m)))
-    ) {
-      best = { m, n, d, diff };
-    }
-  }
-  const m = best.m;
-  const n = best.n;
-  return { s: Math.min(W / (m * w0), H / (n * h0)), m, n };
 }
 
 function relayoutBatchGrid(node) {
-  const state = node._batchState;
-  if (!state || !state.container || !state.inner) return;
-  const container = state.container;
-  const inner = state.inner;
-  const count = state.imageMetas.length;
-  if (!count) return;
-
-  // 画板宽度：不能用 container.clientWidth —— ComfyUI 核心在节点选中时
-  // 会把 DOM widget 从"全宽预览"切换到"标准编辑宽度"（~205px），导致布局跳变。
-  // 改用 node.size[0] - 20（左右各 10px margin），这个值不随选中状态变化。
-  const W = Math.max(0, (node.size?.[0] ?? 0) - 20);
-  const H = container.clientHeight;
-  if (!W || !H) return;
-
-  // 强制容器宽度 = 节点宽度，覆盖核心在选中时缩窄 DOM widget 的行为。
-  // 父元素 overflow 为 visible，不会裁剪溢出部分。
-  container.style.width = W + "px";
-
-  // 批次图片尺寸必定相同（同一 [B,H,W,C] tensor），取第一张已加载的原始尺寸
-  const imgs = inner.querySelectorAll(".sitp-batch-cell img");
-  let w0 = 0;
-  let h0 = 0;
-  for (const img of imgs) {
-    if (img.naturalWidth && img.naturalHeight) {
-      w0 = img.naturalWidth;
-      h0 = img.naturalHeight;
-      break;
-    }
-  }
-  // 还没加载完，img.onload 会再次触发
-  if (!w0 || !h0) return;
-
-  const { s, m, n } = computeBatchLayout(count, W, H, w0, h0);
-
-  // 取整避免亚像素导致 grid 溢出
-  const cellW = Math.floor(w0 * s);
-  const cellH = Math.floor(h0 * s);
-  const cells = inner.querySelectorAll(".sitp-batch-cell");
-  cells.forEach((cell) => {
-    cell.style.width = `${cellW}px`;
-    cell.style.height = `${cellH}px`;
-  });
-
-  // Grid 精确控制行列数，不会因亚像素意外换行
-  inner.style.gridTemplateColumns = `repeat(${m}, ${cellW}px)`;
-  inner.style.gridTemplateRows = `repeat(${n}, ${cellH}px)`;
-  inner.style.width = `${m * cellW}px`;
-  inner.style.height = `${n * cellH}px`;
-  app.graph?.setDirtyCanvas(true, true);
-}
-
-function forwardCanvasGestures(el) {
-  el.addEventListener(
-    "wheel",
-    (e) => {
-      e.preventDefault();
-      app.canvas?.processMouseWheel?.(e);
-    },
-    { passive: false },
-  );
-  el.addEventListener("pointerdown", (e) => {
-    // 中键平移交给画布
-    if (e.button === 1) {
-      e.preventDefault();
-      app.canvas?.processMouseDown?.(e);
-    }
-  });
+  node._batchState?.gallery.layout();
 }
 
 function syncSelectionWidget(node, value) {

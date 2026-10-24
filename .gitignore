@@ -10,3 +10,6 @@ venv/
 .trae/
 pyrightconfig.json
 *.bak
+
+# Local workflow snapshot used during debugging.
+/_wf_detail.json

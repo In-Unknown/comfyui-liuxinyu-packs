@@ -11,9 +11,12 @@ from PIL import Image
 
 import folder_paths
 from comfy_api.latest import io
+from liuxinyu_cache import file_changes
 
 
-def editor_layers(reference):
+def editor_paths(reference):
+    if not reference:
+        return []
     root = Path(folder_paths.get_input_directory()).resolve()
     name = reference.removesuffix(" [input]").strip()
     path = (root / name).resolve()
@@ -27,6 +30,11 @@ def editor_layers(reference):
     painted = path.with_name(f"clipspace-paint-{stamp}.png")
     if not masked.resolve().is_relative_to(root) or not painted.resolve().is_relative_to(root):
         raise ValueError("编辑图层路径无效。")
+    return [masked, painted]
+
+
+def editor_layers(reference):
+    masked, painted = editor_paths(reference)
     if not masked.is_file() or not painted.is_file():
         raise ValueError("保存的蒙版或画笔图层文件不存在，请恢复 input 中的编辑文件。")
     with Image.open(masked) as source:
@@ -83,7 +91,12 @@ class LiuxinyuRatioPaint(io.ComfyNode):
         )
 
     @classmethod
+    def fingerprint_inputs(cls, pixels=None, image=""):
+        return file_changes.fingerprint("LiuxinyuRatioPaint", image, editor_paths)
+
+    @classmethod
     def execute(cls, pixels, image=""):
+        file_changes.remember("LiuxinyuRatioPaint", image, editor_paths)
         if pixels.shape[0] == 0:
             raise ValueError("输入图像批次不能为空。")
         height, width = pixels.shape[1:3]

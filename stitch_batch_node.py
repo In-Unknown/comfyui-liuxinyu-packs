@@ -1,5 +1,6 @@
 """将 IMAGE 列表中的全部批次按方向拼接为长图。"""
 
+import torch
 import torch.nn.functional as F
 
 from comfy_api.latest import io
@@ -70,6 +71,28 @@ class LiuxinyuStitchImageBatchList(io.ComfyNode):
         if reverse:
             frames.reverse()
         remaining = sum(length for _, _, length in frames)
+
+        # 分段只减小单次分配，不减少总量；先估算总输出大小，避免跑到一半 OOM
+        total_elements = remaining * cross_size * channels
+        total_bytes = total_elements * 4  # float32，每元素 4 字节
+        try:
+            if batches[0].is_cuda:
+                free_bytes, _ = torch.cuda.mem_get_info(batches[0].device)
+                device_label = "显存"
+            else:
+                import psutil
+                free_bytes = psutil.virtual_memory().available
+                device_label = "内存"
+        except Exception:
+            free_bytes = None
+            device_label = "内存"
+        if free_bytes is not None and total_bytes > free_bytes * 0.6:
+            raise ValueError(
+                f"拼接结果需要约 {total_bytes / 1024**3:.1f} GB {device_label}，"
+                f"当前可用约 {free_bytes / 1024**3:.1f} GB，无法完成。"
+                f"分段只影响单次分配，不减少总量。请减少输入图片数量，"
+                f"或在拼接前降低图片分辨率。"
+            )
 
         outputs = []
         chunk = None
