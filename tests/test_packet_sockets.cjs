@@ -28,11 +28,13 @@ async function main() {
     extension.nodeCreated(node);
     await Promise.resolve();
     assert.equal(node.inputs.length, inputOffset + 1);
-    assert.equal(node.outputs.length, outputOffset + 1 + (isStart ? 1 : 0));
+    assert.equal(node.outputs.length, outputOffset + (isStart ? 1 : 0));
     for (let index = 0; index < 100; index++) {
       node.inputs[index + inputOffset].link = index;
       node.onConnectionsChange(1, index + inputOffset, true);
       await Promise.resolve();
+      assert.equal(node.inputs.length, inputOffset + Math.min(100, index + 2));
+      assert.equal(node.outputs.length, outputOffset + index + 1 + (isStart ? 1 : 0));
     }
     assert.equal(node.inputs.length, inputOffset + 100);
     assert.equal(node.outputs.length, outputOffset + 100 + (isStart ? 1 : 0));
@@ -49,11 +51,12 @@ async function main() {
     node.onConnectionsChange(2, 99 + outputOffset, false);
     await Promise.resolve();
     assert.equal(node.inputs.length, inputOffset + 99);
-    assert.equal(node.outputs.length, outputOffset + 99 + (isStart ? 1 : 0));
+    assert.equal(node.outputs.length, outputOffset + 98 + (isStart ? 1 : 0));
     assert.equal((isStart ? node.outputs : node.inputs)[0].type, "LIUXINYU_PACKET_CONDITION");
     assert.equal(node.size[0], 300);
     if (isStart) {
       assert.equal(node.outputs.at(-1).name, "当前轮次");
+      assert.equal(node.outputs.at(-1).type, "INT");
       node.graph = { links: { 777: { origin_slot: node.outputs.length - 1 } } };
       node.outputs.at(-1).links = [777];
       node.inputs[98].link = 98;

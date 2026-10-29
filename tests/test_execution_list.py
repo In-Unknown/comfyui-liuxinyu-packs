@@ -12,6 +12,7 @@ sys.path.insert(0, str(PACK))
 import execution
 import torch
 from execution_list_node import LiuxinyuRepeatAnyToExecutionList as Repeat
+from execution_list_node import LiuxinyuConcatAnyExecutionLists as Concat
 from packet_tasks import packet_columns
 
 
@@ -51,6 +52,34 @@ class RepeatTests(unittest.TestCase):
         for count in (-1, 1.5, "2", True):
             with self.subTest(count=count), self.assertRaises(ValueError):
                 Repeat.execute("A", count)
+
+
+class ConcatTests(unittest.TestCase):
+    def run_concat(self, lists):
+        inputs = {f"lists.{key}": values for key, values in lists.items()}
+        _, _, v3_data = execution.get_input_data(dict.fromkeys(inputs, None), Concat, "concat")
+        output, _, _, _ = asyncio.run(execution.get_output_data(
+            "concat-test", "concat", Concat, inputs, v3_data=v3_data))
+        return output[0]
+
+    def test_concatenates_unequal_lists_in_numeric_port_order(self):
+        result = self.run_concat({"list10": ["D"], "list2": ["C", "C"],
+                                  "list0": ["A", "B"], "list1": []})
+        self.assertEqual(result, ["A", "B", "C", "C", "D"])
+
+    def test_nested_values_and_tensors_remain_whole(self):
+        array = [{"imageIndex": 1}, {"imageIndex": 2}]
+        image = torch.zeros(3, 2, 4, 3)
+        data = {"samples": image}
+        result = self.run_concat({"list0": [array], "list1": [image, data], "list2": [None]})
+        self.assertEqual(len(result), 4)
+        for actual, expected in zip(result, [array, image, data, None]):
+            self.assertIs(actual, expected)
+        self.assertEqual(len(array), 2)
+
+    def test_single_and_empty_execution_lists(self):
+        self.assertEqual(self.run_concat({"list0": []}), [])
+        self.assertEqual(self.run_concat({"list0": [False, 0, ""]}), [False, 0, ""])
 
 
 if __name__ == "__main__":

@@ -600,6 +600,24 @@ class LiuxinyuStringArraySort(io.ComfyNode):
         return io.NodeOutput(sorted(strings, key=lambda text: _string_natural_sort_key(text, chinese_keys)))
 
 
+class LiuxinyuAnyToString(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="LiuxinyuAnyToString",
+            display_name="任意转换为字符串",
+            category="utils/conversion",
+            search_aliases=["任意转字符串", "任意转文本", "any to string"],
+            description="使用 Python str() 将任意输入转换为字符串；字符串原样返回，其他值使用其文本表示。",
+            inputs=[io.AnyType.Input("value", display_name="任意")],
+            outputs=[io.String.Output(display_name="字符串")],
+        )
+
+    @classmethod
+    def execute(cls, value):
+        return io.NodeOutput(str(value))
+
+
 class LiuxinyuJSObjectToString(io.ComfyNode):
     @classmethod
     def define_schema(cls):

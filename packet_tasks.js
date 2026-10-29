@@ -3,6 +3,48 @@ import { app } from "../../scripts/app.js";
 const MAX_SOCKETS = 100;
 const ROUND_NAME = "当前轮次";
 
+function getLink(graph, id) { return graph?.links?.get?.(id) || graph?.links?.[id]; }
+function compatible(a, b) {
+  if (!a || !b || a === "*" || b === "*") return true;
+  const left = String(a).split(",").map(value => value.trim());
+  return String(b).split(",").some(value => left.includes(value.trim()));
+}
+function updatePacketTypes(node, isStart, inputOffset, outputOffset) {
+  node.inputs.slice(inputOffset).forEach((input, index) => {
+    const cable = getLink(node.graph, input.link);
+    const source = cable && node.graph?.getNodeById?.(cable.origin_id);
+    const type = source?.outputs?.[cable?.origin_slot]?.type || "*";
+    input.type = type;
+    input.label = `输入 ${index + 1} · ${type === "*" ? "任意" : type}`;
+    // Packet Start unpacks ARRAY values: the element type is not the ARRAY
+    // container type. Execution lists of IMAGE/STRING/etc retain their type.
+    const unpackedArray = isStart && String(type).split(",").some(value => value.trim() === "ARRAY");
+    const outputType = unpackedArray ? "*" : type;
+    const output = node.outputs[index + outputOffset];
+    if (!output || output.name === ROUND_NAME) return;
+    output.label = `输出 ${index + 1} · ${unpackedArray ? "任意（数组元素）" : outputType === "*" ? "任意" : outputType}`;
+    if (output.type === outputType) return;
+    output.type = outputType;
+    for (const id of [...(output.links || [])]) {
+      const link = getLink(node.graph, id);
+      if (!link) continue;
+      link.type = outputType;
+      const target = node.graph?.getNodeById?.(link.target_id);
+      const targetInput = target?.inputs?.[link.target_slot];
+      const adaptive = ["LiuxinyuPacketStart", "LiuxinyuPacketEnd", "LiuxinyuReturnPoint",
+        "LiuxinyuIgnoreMemoryChecks", "LiuxinyuRestoreMemoryChecks"].includes(target?.comfyClass)
+        && /^value\d+$/.test(targetInput?.name || "");
+      if (targetInput && !adaptive && !compatible(outputType, targetInput.type)) {
+        target.disconnectInput(link.target_slot);
+      } else {
+        // A type change does not create a new cable; notify downstream dynamic
+        // sockets so a packet -> feedback chain also refreshes immediately.
+        target?.onConnectionsChange?.(1, link.target_slot, true, link, targetInput);
+      }
+    }
+  });
+}
+
 function updatePacketSockets(node) {
   const isStart = node.comfyClass === "LiuxinyuPacketStart";
   const inputOffset = isStart ? 0 : 1;
@@ -18,12 +60,13 @@ function updatePacketSockets(node) {
     if (output.links?.length) lastUsed = Math.max(lastUsed, index);
   });
   const count = Math.min(MAX_SOCKETS, lastUsed + 2);
-  while (node.outputs.length > count + outputOffset) node.removeOutput(node.outputs.length - 1);
+  const outputCount = lastUsed + 1;
+  while (node.outputs.length > outputCount + outputOffset) node.removeOutput(node.outputs.length - 1);
   while (node.inputs.length > count + inputOffset) node.removeInput(node.inputs.length - 1);
   while (node.inputs.length < count + inputOffset) {
     node.addInput(`value${node.inputs.length - inputOffset}`, "*");
   }
-  while (node.outputs.length < count + outputOffset) {
+  while (node.outputs.length < outputCount + outputOffset) {
     node.addOutput(`输出 ${node.outputs.length - outputOffset + 1}`, "*");
   }
   if (isStart) {
@@ -31,11 +74,11 @@ function updatePacketSockets(node) {
     else node.addOutput(ROUND_NAME, "INT");
     const round = node.outputs.at(-1);
     for (const linkId of round.links || []) {
-      const link = node.graph?.links?.[linkId];
+      const link = getLink(node.graph, linkId);
       if (link) link.origin_slot = node.outputs.length - 1;
     }
   }
-  node.inputs.slice(inputOffset).forEach((input, index) => { input.label = `输入 ${index + 1}`; });
+  updatePacketTypes(node, isStart, inputOffset, outputOffset);
   const minimum = node.computeSize();
   node.setSize([Math.max(node.size[0], minimum[0]), minimum[1]]);
   node.setDirtyCanvas(true, true);
@@ -61,13 +104,23 @@ app.registerExtension({
   },
   nodeCreated(node) {
     if (!["LiuxinyuPacketStart", "LiuxinyuPacketEnd"].includes(node.comfyClass)) return;
+    const connectInput = node.onConnectInput;
+    node.onConnectInput = function (slot, type) {
+      if (!compatible(type, this.inputs[slot]?.type)) return false;
+      return connectInput?.apply(this, arguments) ?? true;
+    };
+    const connectOutput = node.onConnectOutput;
+    node.onConnectOutput = function (slot, type) {
+      if (!compatible(this.outputs[slot]?.type, type)) return false;
+      return connectOutput?.apply(this, arguments) ?? true;
+    };
     let pending = false;
     const schedule = () => {
       if (pending) return;
       pending = true;
       queueMicrotask(() => { pending = false; updatePacketSockets(node); });
     };
-    for (const event of ["onConnectionsChange", "onConfigure"]) {
+    for (const event of ["onAdded", "onConnectionsChange", "onConfigure"]) {
       const original = node[event];
       node[event] = function (...args) {
         const result = original?.apply(this, args);

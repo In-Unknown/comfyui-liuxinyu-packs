@@ -31,3 +31,30 @@ class LiuxinyuRepeatAnyToExecutionList(io.ComfyNode):
         if isinstance(count, bool) or not isinstance(count, Integral) or count < 0:
             raise ValueError("重复次数必须是大于或等于 0 的整数。")
         return io.NodeOutput([value] * count)
+
+
+class LiuxinyuConcatAnyExecutionLists(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="LiuxinyuConcatAnyExecutionLists",
+            display_name="顺合任意执行列表",
+            category="utils/conversion",
+            is_input_list=True,
+            description=(
+                "按输入口从上到下的顺序，将各路执行列表首尾相接。"
+                "保留每路内部顺序、重复项和原始类型，不递归拆分数组或图片批次。"
+                "输入口随连接增加，采用 ComfyUI 原生最多 100 个输入；可串联继续顺合。"
+            ),
+            inputs=[io.Autogrow.Input(
+                "lists", template=io.Autogrow.TemplatePrefix(
+                    io.AnyType.Input("value"), prefix="list", min=1, max=100,
+                ),
+            )],
+            outputs=[io.AnyType.Output(display_name="执行列表", is_output_list=True)],
+        )
+
+    @classmethod
+    def execute(cls, lists):
+        ordered = sorted(lists, key=lambda name: int(name.removeprefix("list")))
+        return io.NodeOutput([value for name in ordered for value in lists[name]])

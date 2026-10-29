@@ -2,7 +2,7 @@
 
 面向日常工作流的图片、长图、文件路径、字符串、数学和分包子流工具。适合多目录详情页整理、长图切分与拼接、批次图片挑选保存、提示词组合，以及把多步处理限制在同一个对象范围内。
 
-当前包含 **52 个用户节点**，另有 **3 个由分包功能自动创建的内部节点**。下方按用途完整列出名称、用途和节点 ID。中文名称可直接在 ComfyUI 添加节点的搜索框中查找，ID 用于识别 API 工作流和错误报告。
+当前包含 **61 个用户节点**，另有 **5 个由分包与条件循环功能自动创建的内部节点**。下方按用途完整列出名称、用途和节点 ID。中文名称可直接在 ComfyUI 添加节点的搜索框中查找，ID 用于识别 API 工作流和错误报告。
 
 ## 阅读导航
 
@@ -22,7 +22,7 @@
 | --- | --- |
 | ComfyUI | 需要较新的后端及配套前端，支持 `comfy_api.latest`、V3 节点、Autogrow 动态输入。分包还使用原生循环边界和执行调度接口，旧版可能无法加载或执行。 |
 | 当前核对环境 | Windows，ComfyUI **0.38.0**（核心提交 `6b747c04`），Python **3.13.14**，PyTorch **2.14.0+cu130**。这是当前核对环境，不是经过兼容性测试得出的最低版本。 |
-| Python 依赖 | 复用 ComfyUI 环境中的 PyTorch、NumPy、Pillow、aiohttp。当前包没有独立 `requirements.txt`，正常 ComfyUI 环境无需另装模型或 API SDK。 |
+| Python 依赖 | 复用 ComfyUI 环境中的 PyTorch、NumPy、Pillow、aiohttp。当前包没有独立 `requirements.txt`，正常 ComfyUI 环境无需另装模型或 API SDK；仅「结构化数据变换（JSONata）」需要额外安装 `jsonata-python==0.6.3`。 |
 | 浏览器 | 使用与 ComfyUI 配套的现代浏览器前端。动态端口、图片预览和遮罩编辑器均依赖前端脚本，更新 JS 后需要刷新浏览器。 |
 | Windows 专用功能 | 文件/目录选择按钮使用 Windows 原生对话框；“排序字符串数组”的中文拼音排序使用 Windows API；“运行cmd命令”调用 `cmd.exe`。 |
 | Linux、macOS、无桌面环境 | 未完成跨平台全量验证，不承诺全功能兼容。可手动输入服务器路径；Windows 选择器、中文拼音排序、cmd 节点不能按 Windows 方式使用。 |
@@ -86,9 +86,10 @@ git pull --ff-only
 | [长图切分](#长图切分3个) | 3 | 观察切点、检查边界、正式裁切 |
 | [图片信息与像素](#图片信息与像素3个) | 3 | 图像统计、像素读写 |
 | [字符串与模板](#字符串与模板12个) | 12 | 文本拆合、排序、组合及预览 |
-| [类型转换、数组与执行列表](#类型转换数组与执行列表8个) | 8 | JSON、字面量、数字与整体重复 |
+| [类型转换、数组与执行列表](#类型转换数组与执行列表12个) | 12 | JSON、字面量、数字，执行列表收集、顺合与 JSONata 变换 |
 | [数学与函数采样](#数学与函数采样11个) | 11 | 多输入计算、整数运算与数列 |
-| [分包子流](#分包子流2个) | 2 | 每个对象独立完成一段处理 |
+| [分包子流与条件循环](#分包子流与条件循环5个) | 5 | 逐个对象独立处理，或比较数据并按条件反复更新 |
+| [任务内存控制](#任务内存控制2个) | 2 | 暂停或恢复当前任务的逐步 RAM 检查与回收 |
 | [系统命令](#系统命令1个) | 1 | 在 Windows 主机运行 cmd |
 
 ### 路径、加载与保存（8个）
@@ -109,9 +110,9 @@ git pull --ff-only
 | 节点 | 用途与关键行为 | 节点 ID |
 | --- | --- | --- |
 | [预览超长图片](docs/LiuxinyuPreviewLongImage.md) | 缩略图网格与可滚动单图；缩放/平移时优先小图，停稳后恢复当前尺度的清晰度。 | `LiuxinyuPreviewLongImage` |
-| 从批次列表拼接图片 | 收取整个图片执行列表；横拼统一高度、竖拼统一宽度，无间隔；超过所选格式单边上限时分段输出，本节点不保存文件。 | `LiuxinyuStitchImageBatchList` |
+| [从批次列表拼接图片](docs/LiuxinyuStitchImageBatchList.md) | 收取整个图片执行列表；横拼统一高度、竖拼统一宽度，无间隔；超过所选格式单边上限时分段输出，本节点不保存文件。 | `LiuxinyuStitchImageBatchList` |
 | [遮罩区域图片排列组合](docs/ImageMaskCombinations.md) | 对同尺寸候选图穷举有序对，以一张作底、另一张填充蒙版区域，输出合成批次及组合索引。 | `ImageMaskCombinations` |
-| 绘制蒙版绘制画笔于比例图像 | 使用官方遮罩编辑器；底图改变但比例不变时复用并缩放画笔/蒙版，输出带笔迹图和 MASK。 | `LiuxinyuRatioPaint` |
+| [绘制蒙版绘制画笔于比例图像](docs/LiuxinyuRatioPaint.md) | 使用官方遮罩编辑器；底图改变但比例不变时复用并缩放画笔/蒙版，输出带笔迹图和 MASK。 | `LiuxinyuRatioPaint` |
 
 ### 长图切分（3个）
 
@@ -135,31 +136,35 @@ git pull --ff-only
 
 | 节点 | 用途与关键行为 | 节点 ID |
 | --- | --- | --- |
-| 从文本文件中获取字符串 | 读取文本并输出字符数、行数；识别 UTF-8、带 BOM 的 UTF-16/32，兼容 GB18030，保留空格和换行。 | `LiuxinyuLoadTextFile` |
-| 动态多块多行字符串 | 增加独立文本块，每路有自己的输入输出，连接上游时使用上游文本。 | `LiuxinyuDynamicMultilineText` |
-| 字符串拼接 | 按输入顺序直接拼接，不加分隔符，输入口随连接增加。 | `LiuxinyuStringConcatenate` |
-| 切分字符串为数组 | 按完整分隔文本切分，可保留分隔符及空元素；不是正则切分。 | `LiuxinyuStringArraySplit` |
-| 组装字符串为字符串数组 | 按输入顺序收集，已有字符串列表展开合并，输出供下游逐项处理。 | `LiuxinyuStringArrayBuild` |
-| 从字符串数组读取字符串 | 以从 0 开始的下标读取一项，越界报错。 | `LiuxinyuStringArrayGet` |
-| 拼装字符串数组为字符串 | 将收到的字符串列表整体按顺序拼成一个字符串，不加分隔符。 | `LiuxinyuStringArrayJoin` |
-| 排序字符串数组 | 自然排序使 A9 排在 A10 前，中文使用 Windows 简体中文拼音排序，不去重。 | `LiuxinyuStringArraySort` |
-| 字符串排列组合 | 对多组候选求所有组合，输出 `t1`、`t2` 等参数；可按候选下标规则排除组合。 | `LiuxinyuStringCombinations` |
-| 从模板生成文本 | 替换 `{t1}`、`{t2}` 等占位符；接排列组合后逐条生成提示词。 | `LiuxinyuTextFromTemplate` |
-| 预览参数组合或字符串数组 | 表格或文本方式浏览参数组合、字符串列表及单条文本，无输出。 | `LiuxinyuPreviewText` |
-| 预览JS对象或数组 | 树状展开对象/数组，查看类型、下标和值，可复制 JSON，无输出。 | `LiuxinyuPreviewJSObject` |
+| [从文本文件中获取字符串](docs/LiuxinyuLoadTextFile.md) | 读取文本并输出字符数、行数；识别 UTF-8、带 BOM 的 UTF-16/32，兼容 GB18030，保留空格和换行。 | `LiuxinyuLoadTextFile` |
+| [动态多块多行字符串](docs/LiuxinyuDynamicMultilineText.md) | 增加独立文本块，每路有自己的输入输出，连接上游时使用上游文本。 | `LiuxinyuDynamicMultilineText` |
+| [字符串拼接](docs/LiuxinyuStringConcatenate.md) | 按输入顺序直接拼接，不加分隔符，输入口随连接增加。 | `LiuxinyuStringConcatenate` |
+| [切分字符串为数组](docs/LiuxinyuStringArraySplit.md) | 按完整分隔文本切分，可保留分隔符及空元素；不是正则切分。 | `LiuxinyuStringArraySplit` |
+| [组装字符串为字符串数组](docs/LiuxinyuStringArrayBuild.md) | 按输入顺序收集，已有字符串列表展开合并，输出供下游逐项处理。 | `LiuxinyuStringArrayBuild` |
+| [从字符串数组读取字符串](docs/LiuxinyuStringArrayGet.md) | 以从 0 开始的下标读取一项，越界报错。 | `LiuxinyuStringArrayGet` |
+| [拼装字符串数组为字符串](docs/LiuxinyuStringArrayJoin.md) | 将收到的字符串列表整体按顺序拼成一个字符串，不加分隔符。 | `LiuxinyuStringArrayJoin` |
+| [排序字符串数组](docs/LiuxinyuStringArraySort.md) | 自然排序使 A9 排在 A10 前，中文使用 Windows 简体中文拼音排序，不去重。 | `LiuxinyuStringArraySort` |
+| [字符串排列组合](docs/LiuxinyuStringCombinations.md) | 对多组候选求所有组合，输出 `t1`、`t2` 等参数；可按候选下标规则排除组合。 | `LiuxinyuStringCombinations` |
+| [从模板生成文本](docs/LiuxinyuTextFromTemplate.md) | 替换 `{t1}`、`{t2}` 等占位符；接排列组合后逐条生成提示词。 | `LiuxinyuTextFromTemplate` |
+| [预览参数组合或字符串数组](docs/LiuxinyuPreviewText.md) | 表格或文本方式浏览参数组合、字符串列表及单条文本，无输出。 | `LiuxinyuPreviewText` |
+| [预览JS对象或数组](docs/LiuxinyuPreviewJSObject.md) | 树状展开对象/数组，查看类型、下标和值，可复制 JSON，无输出。 | `LiuxinyuPreviewJSObject` |
 
-### 类型转换、数组与执行列表（8个）
+### 类型转换、数组与执行列表（12个）
 
 | 节点 | 用途与关键行为 | 节点 ID |
 | --- | --- | --- |
 | [字符串转为字面量](docs/LiuxinyuStringToLiteral.md) | 解析数字、颜色、JSON 对象和数组等；“字面量”展开数组为执行列表，“完整字面量”保留整个数组/对象。 | `LiuxinyuStringToLiteral` |
-| 字符串转为JS对象 | 解析标准 JSON，保留嵌套结构、布尔值和 null，不执行 JavaScript；数组整体输出。 | `LiuxinyuStringToJSObject` |
-| 使用js点符号语句读取对象 | 用 `a.b[0]`、`[0]`、`["a.b"]` 等路径取值，数组支持 `length`，保留结果类型。 | `LiuxinyuReadJSObjectPath` |
-| js对象转换为字符串 | 字符串原样返回，对象、数组和参数组合转 JSON 文本，保留中文和结构。 | `LiuxinyuJSObjectToString` |
-| 数字转换 | 将数字、布尔值、数字字符串或一维数组转为浮点数及整数，数组逐项输出。 | `LiuxinyuNumberConvert` |
-| 数字转换为字符串 | 将数字转为文本，不额外做四舍五入或补零。 | `LiuxinyuNumberToString` |
+| [字符串转为JS对象](docs/LiuxinyuStringToJSObject.md) | 解析标准 JSON，保留嵌套结构、布尔值和 null，不执行 JavaScript；数组整体输出。 | `LiuxinyuStringToJSObject` |
+| [使用js点符号语句读取对象](docs/LiuxinyuReadJSObjectPath.md) | 用 `a.b[0]`、`[0]`、`["a.b"]` 等路径取值，数组支持 `length`，保留结果类型。 | `LiuxinyuReadJSObjectPath` |
+| [js对象转换为字符串](docs/LiuxinyuJSObjectToString.md) | 字符串原样返回，对象、数组和参数组合转 JSON 文本，保留中文和结构。 | `LiuxinyuJSObjectToString` |
+| [数字转换](docs/LiuxinyuNumberConvert.md) | 将数字、布尔值、数字字符串或一维数组转为浮点数及整数，数组逐项输出。 | `LiuxinyuNumberConvert` |
+| [数字转换为字符串](docs/LiuxinyuNumberToString.md) | 将数字转为文本，不额外做四舍五入或补零。 | `LiuxinyuNumberToString` |
+| [任意转换为字符串](docs/LiuxinyuAnyToString.md) | 使用 Python `str()` 将任意输入转为文本，字符串原样返回。 | `LiuxinyuAnyToString` |
 | [多个数值组成数组](docs/LiuxinyuNumberArray.md) | 将动态数值输入组成完整数组；全为整数则保留整数，混入浮点数则统一为浮点数。 | `LiuxinyuNumberArray` |
 | [批量任意为执行列表](docs/LiuxinyuRepeatAnyToExecutionList.md) | 将任意值整体重复 N 次，不拆图片批次、不深拷贝张量，N=0 输出空列表。 | `LiuxinyuRepeatAnyToExecutionList` |
+| [执行列表收集为数组](docs/LiuxinyuCollectExecutionList.md) | 把完整执行列表收集为一个数组，保留顺序和嵌套数组，不展开数组元素。 | `LiuxinyuCollectExecutionList` |
+| [顺合任意执行列表](docs/LiuxinyuConcatAnyExecutionLists.md) | 按输入口从上到下的顺序将各路执行列表首尾相接，保留内部顺序、重复项和类型，不递归拆分数组或图片批次；可串联继续顺合。 | `LiuxinyuConcatAnyExecutionLists` |
+| [结构化数据变换（JSONata）](docs/LiuxinyuStructuredTransform.md) | 用 JSONata 表达式查询、分组、关联或变换 JSON 数据；输入经 data0、data1 等访问，可增至 100 路。需在 ComfyUI Python 中安装 `jsonata-python==0.6.3`。 | `LiuxinyuStructuredTransform` |
 
 ### 数学与函数采样（11个）
 
@@ -175,14 +180,26 @@ git pull --ff-only
 | [取负](docs/LiuxinyuNegate.md) | 返回输入数值的相反数。 | `LiuxinyuNegate` |
 | [三角与反三角函数](docs/LiuxinyuTrigonometry.md) | 三角或反三角函数，支持弧度/角度单位。 | `LiuxinyuTrigonometry` |
 | [双曲与反双曲函数](docs/LiuxinyuHyperbolic.md) | 双曲或反双曲函数，输入需满足相应定义域。 | `LiuxinyuHyperbolic` |
-| 函数生成精度数列 | 解析表达式和变量，按范围、间隔与小数位采样，输出多维数列和坐标；表达式中的三角函数使用弧度。 | `LiuxinyuFunctionGrid` |
+| [函数生成精度数列](docs/LiuxinyuFunctionGrid.md) | 解析表达式和变量，按范围、间隔与小数位采样，输出多维数列和坐标；表达式中的三角函数使用弧度。 | `LiuxinyuFunctionGrid` |
 
-### 分包子流（2个）
+### 分包子流与条件循环（5个）
 
 | 节点 | 用途与关键行为 | 节点 ID |
 | --- | --- | --- |
 | [分包执行子流回归](docs/LiuxinyuPacketStart.md) | 按最长输入逐包发出，等待本包子流回归后再发下一包；当前轮次从 1 开始。 | `LiuxinyuPacketStart` |
 | [回归分包子流条件](docs/LiuxinyuPacketEnd.md) | 等待本包所有接入分支完成，全部包结束后按包顺序汇总各路结果。 | `LiuxinyuPacketEnd` |
+| [跳回点](docs/LiuxinyuReturnPoint.md) | 提供初始数据与调回句柄，将回归数据作为下一轮输入。 | `LiuxinyuReturnPoint` |
+| [条件回归](docs/LiuxinyuConditionalReturn.md) | 按句柄复制数据端口与类型；true 携带本轮数据跳回再执行一轮，false 离开循环、输出本轮结果并执行下游。 | `LiuxinyuConditionalReturn` |
+| [判断哈希相等](docs/LiuxinyuHashEqual.md) | 比较两份数据的类型、SHA-256、MD5 并精确复核内容，返回单个布尔值。 | `LiuxinyuHashEqual` |
+
+### 任务内存控制（2个）
+
+| 节点 | 用途与关键行为 | 节点 ID |
+| --- | --- | --- |
+| [当前忽略内存检查和回收](docs/LiuxinyuIgnoreMemoryChecks.md) | 等全部已连接输入完成后，暂停本次任务调度步骤后的 RAM 检查和回收；数据按编号透传。 | `LiuxinyuIgnoreMemoryChecks` |
+| [恢复内存检查和回收](docs/LiuxinyuRestoreMemoryChecks.md) | 等全部已连接输入完成后，恢复正常检查和回收，也可以作为流程终点。 | `LiuxinyuRestoreMemoryChecks` |
+
+这两个节点无配置项，端口按需增长、类型跟随输入，没有固定数量上限。需要本地核心配套的 `Schema.dynamic_io_prefix`、`ExecutionList.set_ram_checks_enabled` 和执行器检查开关；只复制节点包到未包含这些接口的 ComfyUI 不足以启用功能。修改核心或节点 Python 后需要重启，更新前端脚本后刷新页面。
 
 ### 系统命令（1个）
 
@@ -190,15 +207,17 @@ git pull --ff-only
 | --- | --- | --- |
 | [运行cmd命令](docs/RunCmd.md) | 在 Windows 主机运行单条或多行 cmd，合并返回标准输出和错误输出；可设超时及是否结束进程。 | `RunCmd` |
 
-### 内部调度节点（3个）
+### 内部调度节点（5个）
 
-以下节点标记为开发专用，由分包自动创建，**无需手动添加或接线**。列出是为了让节点总数和错误报告中的 ID 都有出处。
+以下节点标记为开发专用，由分包或条件循环自动创建，**无需手动添加或接线**。列出是为了让节点总数和错误报告中的 ID 都有出处。
 
 | 内部节点 ID | 作用 |
 | --- | --- |
 | `LiuxinyuPacketSource` | 为当前包提供数据及轮次，作为展开后的子流输入。 |
 | `LiuxinyuPacketStep` | 依次展开每包子流，在全部处理完毕后释放回归节点。 |
 | `LiuxinyuPacketCollect` | 收集当前包各路结果，追加到此前包的结果中。 |
+| `LiuxinyuReturnSource` | 提供当前轮完整数据，保持数组、字典和图片批次。 |
+| `LiuxinyuConditionalStep` | 按布尔条件展开下一轮，或结束并释放条件回归节点。 |
 
 ## 数组、执行列表和图片批次
 

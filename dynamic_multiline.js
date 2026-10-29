@@ -2,7 +2,6 @@
 import { ComfyWidgets } from "../../scripts/widgets.js";
 
 const MAX_BLOCKS = 100;
-const BLOCK_HEIGHT = 164;
 
 function setupBlocks(node) {
   const storage = node.widgets.find((widget) => widget.name === "blocks_json");
@@ -22,11 +21,19 @@ function setupBlocks(node) {
   }
 
   function syncConnections() {
+    let changed = false;
     fields.forEach(({ text }, index) => {
       const connected = node.isInputConnected(index);
+      if (text.hidden !== connected) changed = true;
+      text.hidden = connected;
+      text.element.hidden = connected;
       text.element.readOnly = connected;
       text.element.title = connected ? "已连接上游；输出使用上游文本，框内文字保留。" : `文本${index + 1}`;
     });
+    if (changed) {
+      node.setSize([node.size[0], node.computeSize()[1]]);
+      node.setDirtyCanvas(true, true);
+    }
   }
 
   function syncPorts() {
@@ -86,7 +93,7 @@ function setupBlocks(node) {
     saveBlocks();
     syncPorts();
     moveButtonLast();
-    node.setSize([node.size[0], blocks.length * BLOCK_HEIGHT + 34]);
+    node.setSize([node.size[0], node.computeSize()[1]]);
     node.graph?.afterChange();
     node.setDirtyCanvas(true, true);
   }, { serialize: false, canvasOnly: true });
@@ -116,7 +123,7 @@ function setupBlocks(node) {
     syncPorts();
     moveButtonLast();
     node.widgets_start_y = 0;
-    node.setSize([Math.max(400, node.size[0]), blocks.length * BLOCK_HEIGHT + 34]);
+    node.setSize([Math.max(400, node.size[0]), node.computeSize()[1]]);
     } finally {
       restoring = false;
     }
