@@ -350,4 +350,8 @@ Get-ChildItem tests\*.cjs | ForEach-Object { node $_.FullName; if ($LASTEXITCODE
 
 在 [GitHub Issues](https://github.com/In-Unknown/comfyui-liuxinyu-packs/issues) 提供系统、ComfyUI/前端版本、本包提交号（`git rev-parse --short HEAD`）、节点名称/ID、完整错误栈及最短复现步骤。图片问题补充尺寸、批次数及是否为执行列表；UI 问题可附截图、录屏和控制台错误。分享工作流前移除个人路径、隐私文本及其他节点的密钥。
 
-提交改动时说明实际问题、预期行为和验证方式；文档改动检查链接及节点名称，代码改动运行相关测试。仓库目前没有单独的 LICENSE 文件，授权事项请联系维护者。
+提交改动时说明实际问题、预期行为和验证方式；文档改动检查链接及节点名称，代码改动运行相关测试。
+
+## 许可证
+
+本项目以 [GPL-3.0](LICENSE)（GNU 通用公共许可证第 3 版）发布。复制、修改或合并本项目的衍生作品，须同样以 GPL-3.0 及相应版权声明开源。
