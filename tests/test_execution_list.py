@@ -13,6 +13,7 @@ import execution
 import torch
 from execution_list_node import LiuxinyuRepeatAnyToExecutionList as Repeat
 from execution_list_node import LiuxinyuConcatAnyExecutionLists as Concat
+from execution_list_node import LiuxinyuArrayToExecutionList as ArrayToList
 from packet_tasks import packet_columns
 
 
@@ -20,6 +21,34 @@ def run_node(values, counts):
     output, _, _, _ = asyncio.run(execution.get_output_data(
         "repeat-test", "repeat", Repeat, {"value": values, "count": counts}))
     return output[0]
+
+
+class ArrayToListTests(unittest.TestCase):
+    def run_arrays(self, arrays):
+        output, _, _, _ = asyncio.run(execution.get_output_data(
+            "array-test", "array", ArrayToList, {"array": arrays}))
+        return output[0]
+
+    def test_preserves_nested_values_types_and_identity(self):
+        image = torch.zeros(2, 2, 4, 3)
+        nested = [1, [2, 3]]
+        record = {"samples": image}
+        values = ["中文", 0, False, None, nested, image, record, record, object()]
+        result = self.run_arrays([values])
+        self.assertEqual(len(result), len(values))
+        for actual, expected in zip(result, values):
+            self.assertIs(actual, expected)
+
+    def test_empty_singleton_tuple_and_multiple_arrays(self):
+        self.assertEqual(self.run_arrays([[]]), [])
+        self.assertEqual(self.run_arrays([["A"]]), ["A"])
+        self.assertEqual(self.run_arrays([["A", "A"], [], ("B", "C")]),
+                         ["A", "A", "B", "C"])
+
+    def test_non_arrays_are_not_silently_split(self):
+        for value in ("[1,2]", {"a": 1}, 1, None, torch.zeros(2, 2)):
+            with self.subTest(kind=type(value).__name__), self.assertRaises(TypeError):
+                self.run_arrays([value])
 
 
 class RepeatTests(unittest.TestCase):

@@ -2,7 +2,7 @@
 
 面向日常工作流的图片、长图、文件路径、字符串、数学和分包子流工具。适合多目录详情页整理、长图切分与拼接、批次图片挑选保存、提示词组合，以及把多步处理限制在同一个对象范围内。
 
-当前包含 **61 个用户节点**，另有 **5 个由分包与条件循环功能自动创建的内部节点**。下方按用途完整列出名称、用途和节点 ID。中文名称可直接在 ComfyUI 添加节点的搜索框中查找，ID 用于识别 API 工作流和错误报告。
+当前包含 **62 个用户节点**，另有 **5 个由分包与条件循环功能自动创建的内部节点**。下方按用途完整列出名称、用途和节点 ID。中文名称可直接在 ComfyUI 添加节点的搜索框中查找，ID 用于识别 API 工作流和错误报告。
 
 ## 阅读导航
 
@@ -149,7 +149,7 @@ git pull --ff-only
 | [预览参数组合或字符串数组](docs/LiuxinyuPreviewText.md) | 表格或文本方式浏览参数组合、字符串列表及单条文本，无输出。 | `LiuxinyuPreviewText` |
 | [预览JS对象或数组](docs/LiuxinyuPreviewJSObject.md) | 树状展开对象/数组，查看类型、下标和值，可复制 JSON，无输出。 | `LiuxinyuPreviewJSObject` |
 
-### 类型转换、数组与执行列表（12个）
+### 类型转换、数组与执行列表（13个）
 
 | 节点 | 用途与关键行为 | 节点 ID |
 | --- | --- | --- |
@@ -162,6 +162,7 @@ git pull --ff-only
 | [任意转换为字符串](docs/LiuxinyuAnyToString.md) | 使用 Python `str()` 将任意输入转为文本，字符串原样返回。 | `LiuxinyuAnyToString` |
 | [多个数值组成数组](docs/LiuxinyuNumberArray.md) | 将动态数值输入组成完整数组；全为整数则保留整数，混入浮点数则统一为浮点数。 | `LiuxinyuNumberArray` |
 | [批量任意为执行列表](docs/LiuxinyuRepeatAnyToExecutionList.md) | 将任意值整体重复 N 次，不拆图片批次、不深拷贝张量，N=0 输出空列表。 | `LiuxinyuRepeatAnyToExecutionList` |
+| [将任意数组转为执行列表](docs/LiuxinyuArrayToExecutionList.md) | 直接将数组第一层元素逐项输出，保留类型、顺序和对象引用，空数组输出零项。 | `LiuxinyuArrayToExecutionList` |
 | [执行列表收集为数组](docs/LiuxinyuCollectExecutionList.md) | 把完整执行列表收集为一个数组，保留顺序和嵌套数组，不展开数组元素。 | `LiuxinyuCollectExecutionList` |
 | [顺合任意执行列表](docs/LiuxinyuConcatAnyExecutionLists.md) | 按输入口从上到下的顺序将各路执行列表首尾相接，保留内部顺序、重复项和类型，不递归拆分数组或图片批次；可串联继续顺合。 | `LiuxinyuConcatAnyExecutionLists` |
 | [结构化数据变换（JSONata）](docs/LiuxinyuStructuredTransform.md) | 用 JSONata 表达式查询、分组、关联或变换 JSON 数据；输入经 data0、data1 等访问，可增至 100 路。需在 ComfyUI Python 中安装 `jsonata-python==0.6.3`。 | `LiuxinyuStructuredTransform` |
