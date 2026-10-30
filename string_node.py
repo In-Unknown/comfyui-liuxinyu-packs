@@ -56,6 +56,35 @@ def _js_path_parts(expression):
     return parts
 
 
+def _js_path_target(content, expression):
+    if not isinstance(content, (dict, list)):
+        raise ValueError("输入需要是解析后的对象或数组。")
+    value = content
+    parents = []
+    for key, location in _js_path_parts(expression):
+        if isinstance(value, dict):
+            key = str(key)
+            if key not in value:
+                raise ValueError(f"读取失败：{location}，对象中不存在键 {key!r}。")
+            parents.append((value, key))
+            value = value[key]
+        elif isinstance(value, list):
+            if key == "length":
+                value = len(value)
+                continue
+            if isinstance(key, str) and re.fullmatch(r"0|[1-9][0-9]*", key):
+                key = int(key)
+            if not isinstance(key, int):
+                raise ValueError(f"读取失败：{location}，数组需要从 0 开始的整数下标，或 length。")
+            if key >= len(value):
+                raise ValueError(f"读取失败：{location}，下标 {key} 越界，数组共有 {len(value)} 项。")
+            parents.append((value, key))
+            value = value[key]
+        else:
+            raise ValueError(f"读取失败：{location}，上一级已经是标量或 null，不能继续读取属性。")
+    return value, parents
+
+
 class LiuxinyuReadJSObjectPath(io.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -80,29 +109,53 @@ class LiuxinyuReadJSObjectPath(io.ComfyNode):
 
     @classmethod
     def execute(cls, content, expression):
-        if not isinstance(content, (dict, list)):
-            raise ValueError("输入需要是解析后的对象或数组。")
-        value = content
-        for key, location in _js_path_parts(expression):
-            if isinstance(value, dict):
-                key = str(key)
-                if key not in value:
-                    raise ValueError(f"读取失败：{location}，对象中不存在键 {key!r}。")
-                value = value[key]
-            elif isinstance(value, list):
-                if key == "length":
-                    value = len(value)
-                    continue
-                if isinstance(key, str) and re.fullmatch(r"0|[1-9][0-9]*", key):
-                    key = int(key)
-                if not isinstance(key, int):
-                    raise ValueError(f"读取失败：{location}，数组需要从 0 开始的整数下标，或 length。")
-                if key >= len(value):
-                    raise ValueError(f"读取失败：{location}，下标 {key} 越界，数组共有 {len(value)} 项。")
-                value = value[key]
-            else:
-                raise ValueError(f"读取失败：{location}，上一级已经是标量或 null，不能继续读取属性。")
+        value, _ = _js_path_target(content, expression)
         return io.NodeOutput(value)
+
+
+class LiuxinyuInsertJSObject(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="LiuxinyuInsertJSObject",
+            display_name="插入字段到字典或者js对象",
+            category="utils/conversion",
+            search_aliases=["插入字段", "数组追加", "insert object", "append array"],
+            description=(
+                "按点号与数组下标找到挂载位置；留空表示根位置。"
+                "目标为字典时，新增值必须是字典，将其中键值对插入，已有键报错；"
+                "目标为数组时，将任意值作为一项追加到末尾，数组值也不会展开。"
+                "返回完整对象或数组，不修改输入；只复制挂载路径上的容器，不深拷贝张量等值。"
+                "路径不存在、下标越界或目标为标量时报错，不自动创建中间结构。"
+            ),
+            inputs=[
+                io.MultiType.Input("content", types=[io.Dict, io.Array], display_name="对象或数组"),
+                io.String.Input("expression", display_name="挂载访问语句", default="", multiline=False,
+                                tooltip='例如 products[0].analysis 或 ["特殊.键名"]；留空挂载根位置。'),
+                io.AnyType.Input("value", display_name="新增值"),
+            ],
+            outputs=[io.AnyType.Output(display_name="完整对象或数组")],
+        )
+
+    @classmethod
+    def execute(cls, content, expression, value):
+        target, parents = _js_path_target(content, expression)
+        if isinstance(target, dict):
+            if not isinstance(value, dict):
+                raise ValueError("挂载位置是字典，新增值必须是包含键值对的字典。")
+            conflicts = target.keys() & value.keys()
+            if conflicts:
+                raise ValueError(f"字段已存在，禁止覆盖：{list(conflicts)!r}。")
+            result = {**target, **value}
+        elif isinstance(target, list):
+            result = [*target, value]
+        else:
+            raise ValueError("挂载位置必须是字典或数组，不能是字符串、数字、布尔值或 null。")
+        for parent, key in reversed(parents):
+            copied = parent.copy()
+            copied[key] = result
+            result = copied
+        return io.NodeOutput(result)
 
 
 class LiuxinyuStringToJSObject(io.ComfyNode):
