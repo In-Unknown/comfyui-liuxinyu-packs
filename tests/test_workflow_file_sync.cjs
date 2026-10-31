@@ -1,0 +1,291 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const { test } = require('node:test');
+
+const source = fs.readFileSync(path.join(__dirname, '../workflow_file_sync.js'), 'utf8')
+  .replace(/^import .*;\r?\n/gm, '');
+const graph = (value) => ({ nodes: [{ id: 1, widgets_values: [value] }], links: [] });
+const copy = (value) => JSON.parse(JSON.stringify(value));
+
+function harness({ savedAt = 1000, modified = 2000, server = graph('server'), storage } = {}) {
+  const listeners = {};
+  const actions = { draft: [], workflow: [] };
+  const timers = new Map();
+  const dialogs = [];
+  const requests = [];
+  const loads = [];
+  const warnings = [];
+  let extension, nextTimer = 0;
+  const now = 5000;
+  storage ||= new Map();
+  if (!storage.has('Comfy.Workflow.DraftIndex.v2:personal')) {
+    storage.set('Comfy.Workflow.DraftIndex.v2:personal', JSON.stringify({ entries: {
+      test: { path: 'workflows/test.json', updatedAt: savedAt, isTemporary: false },
+    } }));
+  }
+  const workflow = {
+    path: 'workflows/test.json', key: 'test.json', isPersisted: true,
+    lastModified: modified, size: 80, isModified: true,
+    activeState: graph('cached'), originalContent: JSON.stringify(graph('initial')),
+    content: JSON.stringify(graph('cached')),
+    changeTracker: {
+      initialState: graph('initial'),
+      reset(current) {
+        if (current) workflow.activeState = copy(current);
+        this.initialState = copy(workflow.activeState);
+      },
+      updateModified() {
+        workflow.isModified = JSON.stringify(this.initialState) !== JSON.stringify(workflow.activeState);
+      },
+      captureCanvasState() {
+        workflow.activeState = copy(state.canvas);
+        this.updateModified();
+      },
+    },
+  };
+  const payloads = new Map([[workflow.path, { data: JSON.stringify(workflow.activeState), updatedAt: savedAt }]]);
+  const drafts = {
+    $onAction(fn) { actions.draft.push(fn); },
+    getDraft(p) { return payloads.get(p); },
+    saveDraft(p, data, meta) {
+      const afters = [];
+      actions.draft.forEach((fn) => fn({ name: 'saveDraft', args: [p, data, meta], after: (f) => afters.push(f) }));
+      payloads.set(p, { data, updatedAt: now });
+      afters.forEach((fn) => fn(true));
+      return true;
+    },
+    removeDraft(p) { payloads.delete(p); },
+  };
+  const workflows = {
+    activeWorkflow: workflow,
+    _p: { _s: new Map([['workflowDraftV2', drafts]]) },
+    $onAction(fn) { actions.workflow.push(fn); },
+  };
+  const state = { modified, server, canvas: copy(workflow.activeState), normalizeAfterLoad: false,
+    failFetch: false, failLoad: false, invalidJSON: false };
+  function element(tag) {
+    const events = {};
+    const el = {
+      tag, style: {}, children: [], returnValue: '', closed: false,
+      append(...children) { this.children.push(...children); },
+      setAttribute() {},
+      addEventListener(name, cb) { events[name] = cb; },
+      showModal() { dialogs.push(this); },
+      close(value = '') { if (this.closed) return; this.closed = true; this.returnValue = value; events.close?.(); },
+      remove() {},
+    };
+    return el;
+  }
+  const api = {
+    api_base: '', user: '',
+    addEventListener(name, cb) { listeners[name] = cb; },
+    async fetchApi(url, options) {
+      requests.push({ url, options });
+      return { ok: !state.failFetch, status: state.failFetch ? 503 : 200,
+        async json() { return [{ path: 'test.json', modified: state.modified, size: 80 }]; } };
+    },
+    async getUserData(p, options) {
+      requests.push({ path: p, options });
+      return { ok: !state.failFetch, status: state.failFetch ? 503 : 200,
+        async text() { return state.invalidJSON ? '{broken' : JSON.stringify(state.server); } };
+    },
+  };
+  const app = {
+    rootGraph: { serialize: () => copy(state.canvas) },
+    extensionManager: { workflow: workflows, toast: { add: (v) => warnings.push(v) } },
+    registerExtension(e) { extension = e; },
+    async loadGraphData(data, clean, restoreView, target) {
+      loads.push(copy(data));
+      assert.equal(target, workflow);
+      extension.beforeLoadGraph();
+      if (state.failLoad) { state.failLoad = false; return false; }
+      workflow.activeState = copy(data);
+      workflow.changeTracker.initialState = copy(data);
+      state.canvas = copy(data);
+      drafts.saveDraft(workflow.path, JSON.stringify(data), {});
+      extension.afterLoadGraph();
+      // Native activation takes its baseline before afterLoadGraph extensions
+      // and the final model/media pipeline have finished normalizing nodes.
+      if (state.normalizeAfterLoad) state.canvas.nodes[0].properties = { initialized: true };
+      return true;
+    },
+  };
+  class TestDate extends Date { static now() { return now; } }
+  vm.runInNewContext(source, {
+    app, api, Date: TestDate,
+    localStorage: { getItem: (k) => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, v) },
+    document: { createElement: element, body: { append() {} } },
+    window: { addEventListener(name, cb) { listeners[name] = cb; } },
+    console: { warn() {} },
+    setTimeout(cb) { const id = ++nextTimer; timers.set(id, cb); return id; },
+    clearTimeout(id) { timers.delete(id); },
+  });
+  extension.setup();
+  async function flush() {
+    for (let i = 0; i < 8; i++) {
+      const batch = [...timers.values()]; timers.clear(); batch.forEach((cb) => cb());
+      await new Promise(setImmediate);
+    }
+  }
+  async function restore() {
+    extension.beforeLoadGraph();
+    // Native restoration writes a fresh timestamp; it must not hide the
+    // previous session's interval or change this extension's decision.
+    drafts.saveDraft(workflow.path, JSON.stringify(workflow.activeState), {});
+    extension.afterLoadGraph();
+    await flush();
+  }
+  return { extension, workflow, workflows, drafts, payloads, state, storage,
+    dialogs, requests, loads, warnings, listeners, actions, restore, flush };
+}
+
+test('restoration is not blocked or replaced; prompt appears afterwards', async () => {
+  const h = harness();
+  assert.equal(h.requests.length, 0);
+  h.extension.beforeLoadGraph();
+  assert.equal(h.requests.length, 0);
+  await h.restore();
+  assert.equal(h.dialogs.length, 1);
+  assert.equal(h.loads.length, 0);
+  assert.deepEqual(h.workflow.activeState, graph('cached'));
+});
+
+test('mtime strictly defines the interval, including identical or reverted content', async () => {
+  for (const modified of [999, 1000, 1001]) {
+    const h = harness({ modified, server: graph('cached') });
+    await h.restore();
+    assert.equal(h.dialogs.length, modified > 1000 ? 1 : 0);
+    assert.equal(h.requests.some((r) => r.path), false, 'no JSON comparison/download before choice');
+  }
+});
+
+test('do nothing preserves graph, cache, and file metadata; same revision is not prompted twice', async () => {
+  const h = harness();
+  await h.restore();
+  const before = JSON.stringify(h.workflow);
+  const draft = JSON.stringify([...h.payloads]);
+  h.dialogs[0].close('keep'); await h.flush();
+  h.listeners.focus(); await h.flush();
+  assert.equal(h.dialogs.length, 1);
+  assert.equal(JSON.stringify(h.workflow), before);
+  assert.equal(JSON.stringify([...h.payloads]), draft);
+  assert.equal(h.loads.length, 0);
+  h.state.modified = 3000;
+  h.listeners.reconnected(); await h.flush();
+  assert.equal(h.dialogs.length, 2);
+});
+
+test('dismiss and browser restart preserve the ignored revision', async () => {
+  const h = harness(); await h.restore();
+  h.dialogs[0].close(); await h.flush();
+  const next = harness({ storage: h.storage }); await next.restore();
+  assert.equal(next.dialogs.length, 0);
+});
+
+test('sync reads latest content after choice, clears stale draft, and never writes backend', async () => {
+  const h = harness(); await h.restore();
+  h.state.server = graph('newer while dialog open');
+  h.state.modified = 2500;
+  h.dialogs[0].close('sync'); await h.flush();
+  assert.deepEqual(h.workflow.activeState, h.state.server);
+  assert.equal(h.workflow.isModified, false);
+  assert.equal(h.workflow.lastModified, 2500);
+  assert.equal(h.payloads.has(h.workflow.path), false);
+  assert.ok(h.requests.every((r) => !r.options.method && r.options.cache === 'no-store'));
+});
+
+test('a new frontend draft save starts a new time window', async () => {
+  const h = harness({ modified: 900 }); await h.restore();
+  h.drafts.saveDraft(h.workflow.path, JSON.stringify(graph('edited')), {});
+  h.state.modified = 4000;
+  h.listeners.focus(); await h.flush();
+  assert.equal(h.dialogs.length, 0);
+  h.state.modified = 6000;
+  h.listeners.focus(); await h.flush();
+  assert.equal(h.dialogs.length, 1);
+});
+
+test('sync stays saved after normalized canvas is checked again; next real edit is dirty', async () => {
+  const h = harness(); await h.restore();
+  h.state.normalizeAfterLoad = true;
+  h.dialogs[0].close('sync'); await h.flush();
+  const syncedCanvas = copy(h.state.canvas);
+  h.workflow.changeTracker.captureCanvasState();
+  assert.equal(h.workflow.isModified, false, 'post-load normalization must belong to the saved baseline');
+  assert.deepEqual(h.workflow.changeTracker.initialState, syncedCanvas);
+  h.workflow.changeTracker.captureCanvasState();
+  assert.equal(h.workflow.isModified, false, 'repeated checks must stay clean');
+  h.state.canvas.nodes[0].widgets_values[0] = 'user edit';
+  h.workflow.changeTracker.captureCanvasState();
+  assert.equal(h.workflow.isModified, true, 'later user edits must still be detected');
+  h.state.canvas = syncedCanvas;
+  h.workflow.changeTracker.captureCanvasState();
+  assert.equal(h.workflow.isModified, false, 'returning to the synced state must be clean');
+});
+
+test('sync acknowledgement does not pretend a new frontend save occurred', async () => {
+  const h = harness(); await h.restore();
+  h.dialogs[0].close('sync'); await h.flush();
+  // Newer than the acknowledged file, but earlier than this browser's clock.
+  // Sync itself must not move the save boundary forward and hide this edit.
+  h.state.modified = 3000;
+  h.listeners.focus(); await h.flush();
+  assert.equal(h.dialogs.length, 2);
+});
+
+test('successful frontend file save does not look like an external change', async () => {
+  const h = harness({ modified: 900 }); await h.restore();
+  h.workflow.lastModified = 6000; h.state.modified = 6000;
+  for (const fn of h.actions.workflow) fn({ name: 'saveWorkflow', args: [h.workflow], after: (cb) => cb() });
+  h.listeners.focus(); await h.flush();
+  assert.equal(h.dialogs.length, 0);
+});
+
+test('switching workflows cancels stale decisions without loading into the wrong tab', async () => {
+  const h = harness(); await h.restore();
+  h.extension.beforeLoadGraph();
+  h.workflows.activeWorkflow = { path: 'workflows/other.json', isPersisted: false };
+  h.dialogs[0].close('sync'); await h.flush();
+  assert.equal(h.loads.length, 0);
+});
+
+test('failed download or invalid JSON leaves current workflow and draft intact', async () => {
+  for (const failure of ['failFetch', 'invalidJSON']) {
+    const h = harness(); await h.restore();
+    const before = JSON.stringify(h.workflow);
+    h.state[failure] = true;
+    h.dialogs[0].close('sync'); await h.flush();
+    assert.equal(JSON.stringify(h.workflow), before);
+    assert.equal(h.loads.length, 0);
+    assert.equal(h.payloads.has(h.workflow.path), true);
+    assert.equal(h.warnings.length, 1);
+  }
+});
+
+test('failed graph load restores cached content and leaves a recoverable draft', async () => {
+  const h = harness(); await h.restore();
+  const original = h.workflow.originalContent;
+  h.state.failLoad = true;
+  h.dialogs[0].close('sync'); await h.flush();
+  assert.deepEqual(h.workflow.activeState, graph('cached'));
+  assert.equal(h.workflow.originalContent, original);
+  assert.deepEqual(JSON.parse(h.payloads.get(h.workflow.path).data), graph('cached'));
+  assert.equal(h.workflow.isModified, true);
+  assert.equal(h.warnings.length, 1);
+});
+
+test('temporary workflows are not checked', async () => {
+  const h = harness(); h.workflow.isPersisted = false;
+  await h.restore();
+  assert.equal(h.requests.length, 0);
+});
+
+test('concurrent focus/reconnect checks do not stack duplicate dialogs', async () => {
+  const h = harness(); await h.restore();
+  h.listeners.focus(); h.listeners.reconnected(); await h.flush();
+  assert.equal(h.dialogs.length, 1);
+  h.dialogs[0].close('keep'); await h.flush();
+  assert.equal(h.dialogs.length, 1);
+});
