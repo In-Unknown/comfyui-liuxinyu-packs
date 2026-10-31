@@ -30,6 +30,12 @@
 
 例如输入 `{"menu":{"items":["苹果","香蕉"]}}`：语句 `menu.items[1]` 输出 `香蕉`；语句 `menu.items.length` 输出 `2`。
 
+## 读取后组装新字典
+
+输入 `{"name":"A","payload":{"score":8}}`，可用两个本节点分别读取 `name` 和 `payload`，然后接[组装键值对](LiuxinyuBuildKeyValuePairs.md)的“键”和“值”，得到 `{"A":{"score":8}}`。读取保留原始值，组装只建立新字典；原输入不会因这两步而改变。
+
+如果输入是多条记录组成的完整数组，先用[将任意数组转为执行列表](LiuxinyuArrayToExecutionList.md)，再从同一条执行分支分别读取键和值，以保持对应关系。
+
 ## 报错情况
 
 - 路径不存在：提示读取失败及不存在的键名。

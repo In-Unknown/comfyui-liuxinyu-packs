@@ -6,6 +6,7 @@ import re
 import ctypes
 import unicodedata
 import codecs
+import math
 from itertools import product
 from pathlib import Path
 
@@ -155,6 +156,222 @@ class LiuxinyuInsertJSObject(io.ComfyNode):
             copied = parent.copy()
             copied[key] = result
             result = copied
+        return io.NodeOutput(result)
+
+
+def _unique_json_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"JSON 包含重复键：{key!r}。")
+        result[key] = value
+    return result
+
+
+def _invalid_json_constant(value):
+    raise ValueError(f"JSON 不允许非有限数值：{value}。")
+
+
+def _finite_json_float(value):
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"JSON 数值超出有限浮点范围：{value}。")
+    return result
+
+
+def _strict_json(text):
+    return json.loads(text, object_pairs_hook=_unique_json_object,
+                      parse_constant=_invalid_json_constant, parse_float=_finite_json_float)
+
+
+def _last_json_document(text):
+    """Read a complete final document, never splice JSON with a greedy regex."""
+    text = text.strip()
+    stack = []
+    quoted = escaped = False
+    candidate = None
+    start = 0
+    for position, char in enumerate(text):
+        if not stack:
+            if char in "[{":
+                start = position
+                stack.append(char)
+            continue
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char in "[{":
+            stack.append(char)
+        elif char in "]}":
+            if stack.pop() != ("[" if char == "]" else "{"):
+                raise ValueError("JSON 括号不匹配。")
+            if not stack:
+                candidate = text[start:position + 1]
+    if stack:
+        raise ValueError("最后一个 JSON 文档未闭合，请提供完整的对象或数组。")
+    if candidate is None:
+        raise ValueError("输入文本中没有完整的 JSON 对象或数组。")
+    return _strict_json(candidate)
+
+
+def _record_field_type(value, kind):
+    if kind.endswith("[]"):
+        return type(value) is list and all(_record_field_type(item, kind[:-2]) for item in value)
+    if kind == "nonempty_string":
+        return type(value) is str and bool(value.strip())
+    kinds = {"string": str, "integer": int, "boolean": bool,
+             "object": dict, "array": list, "null": type(None)}
+    if kind == "number":
+        return type(value) in (int, float)
+    return type(value) is kinds[kind]
+
+
+class LiuxinyuParseJSONRecords(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="LiuxinyuParseJSONRecords", display_name="解析并校验 JSON 记录数组",
+            category="liuxinyu/结构化数据",
+            description=(
+                '从任意来源的文本中选取最后一个 JSON 对象或数组文档，要求结果为对象数组，并逐条检查必需字段与类型。'
+                '支持附带说明和代码围栏；不回退到前面的文档。通过时输出完整数组、true 和空错误信息；'
+                '校验不通过时输出空数组、false 和错误信息，不主动停止执行。由下游决定停止、重试或使用其他数据。'
+                '不展开为执行列表，不补字段或自动转换字段类型。'
+                '拒绝重复 JSON 键和非有限数值。字段规则是简单类型映射，不是 JSON Schema；详细规则和示例见同名帮助文档。'
+            ),
+            inputs=[io.String.Input("text", display_name="输入文本", multiline=True,
+                                    tooltip='包含 JSON 对象数组的文本，例如 [{"id":"A"}]。可来自文件、接口、手动填写或其他文本节点。'),
+                    io.String.Input("fields", display_name="必需字段与类型", default='{"id":"string"}', multiline=True,
+                                    tooltip='JSON 对象，例如 {"id":"nonempty_string","tags":"string[]"}。按直接键检查；支持 string、nonempty_string、integer、number、boolean、object、array、null 及一层 [] 类型。'),
+                    io.Boolean.Input("allow_extra", display_name="允许其他字段", default=False,
+                                     tooltip='关闭时，每条记录的字段必须与规则一致；打开时保留额外字段，不检查其类型。必需字段仍不能缺少。')],
+            outputs=[io.Array.Output(display_name="已校验记录数组"),
+                     io.Boolean.Output(display_name="校验通过"),
+                     io.String.Output(display_name="错误信息")],
+        )
+
+    @classmethod
+    def execute(cls, text, fields, allow_extra=False):
+        try:
+            if not isinstance(text, str):
+                raise ValueError("输入文本必须是字符串。")
+            contract = _strict_json(fields)
+            supported = {"string", "nonempty_string", "integer", "number", "boolean", "object", "array", "null"}
+            if not isinstance(contract, dict) or any(
+                not isinstance(kind, str) or kind.removesuffix("[]") not in supported
+                for kind in contract.values()
+            ):
+                raise ValueError("字段契约需要是字段名到受支持类型的 JSON 对象。")
+            rows = _last_json_document(text)
+            if not isinstance(rows, list):
+                raise ValueError("JSON 顶层需要是记录数组。")
+            for index, row in enumerate(rows):
+                if not isinstance(row, dict):
+                    raise ValueError(f"第 {index + 1} 项需要是对象。")
+                missing = contract.keys() - row.keys()
+                extra = row.keys() - contract.keys()
+                if missing or (extra and not allow_extra):
+                    raise ValueError(f"第 {index + 1} 项字段不符合契约；缺少 {sorted(missing)}，额外 {sorted(extra)}。")
+                for key, kind in contract.items():
+                    if not _record_field_type(row[key], kind):
+                        raise ValueError(f"第 {index + 1} 项的 {key!r} 必须是 {kind}。")
+        except (ValueError, TypeError) as error:
+            return io.NodeOutput([], False, str(error))
+        return io.NodeOutput(rows, True, "")
+
+
+class LiuxinyuArrayObjectPaths(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="LiuxinyuArrayObjectPaths", display_name="可遍历字典的索引列表",
+            category="liuxinyu/结构化数据",
+            description=(
+                '按配置遍历对象字段或数组元素，输出停止位置的路径，同时提供完整数组和逐项执行列表。'
+                '层数 -1 表示遍历到底，正整数表示最多向下读取多少层；提前遇到标量或未开启遍历的容器即停止。'
+                '默认只展开数组；根位置用空字符串表示，已展开的空容器不产生索引。保留原顺序，不修改输入。'
+            ),
+            inputs=[io.MultiType.Input("content", types=[io.Dict, io.Array], display_name="完整数据",
+                                       tooltip='遍历的起点，接解析后的原生对象或数组。输出路径都相对于这个起点。'),
+                    io.Int.Input("depth", display_name="嵌套读取层数", default=-1, min=-1,
+                                 tooltip='-1 遍历到底；正整数最多读取对应层数。根为第 0 层，每读取一个字段或数组元素加 1；0 不适用。'),
+                    io.Boolean.Input("include_fields", display_name="遍历字段", default=False,
+                                     tooltip='开启后继续读取对象各字段；关闭时将对象整体作为一个索引目标。字段名用带引号的方括号保留。'),
+                    io.Boolean.Input("include_arrays", display_name="遍历数组", default=True,
+                                     tooltip='开启后继续读取数组各元素；关闭时将数组整体作为一个索引目标。')],
+            outputs=[io.Array.Output(display_name="索引数组"),
+                     io.String.Output(display_name="索引执行列表", is_output_list=True)],
+        )
+
+    @classmethod
+    def execute(cls, content, depth=-1, include_fields=False, include_arrays=True):
+        if not isinstance(content, (dict, list)):
+            raise ValueError("完整数据需要是对象或数组。")
+        if type(depth) is not int or depth == 0 or depth < -1:
+            raise ValueError("嵌套读取层数必须是 -1 或正整数。")
+        paths = []
+        pending = [(content, "", 0, frozenset())]
+        while pending:
+            value, path, level, ancestors = pending.pop()
+            descend_fields = isinstance(value, dict) and include_fields
+            descend_array = isinstance(value, list) and include_arrays
+            if (depth != -1 and level >= depth) or not (descend_fields or descend_array):
+                paths.append(path)
+                continue
+            if id(value) in ancestors:
+                raise ValueError(f"{path or '<根>'} 的遍历遇到循环引用。")
+            ancestors = ancestors | {id(value)}
+            if descend_fields:
+                if any(not isinstance(key, str) for key in value):
+                    raise ValueError("遍历对象字段时，字段名必须是字符串。")
+                children = [(item, f"{path}[{json.dumps(key, ensure_ascii=False)}]", level + 1, ancestors)
+                            for key, item in value.items()]
+            else:
+                children = [(item, f"{path}[{index}]", level + 1, ancestors)
+                            for index, item in enumerate(value)]
+            pending.extend(reversed(children))
+        return io.NodeOutput(paths, list(paths))
+
+
+class LiuxinyuBuildKeyValuePairs(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="LiuxinyuBuildKeyValuePairs", display_name="组装键值对",
+            category="liuxinyu/结构化数据",
+            search_aliases=["构造字典", "键值对", "build dictionary", "key value"],
+            description=(
+                '将给定的键和值组装成一个新字典。单个字符串键输出 {键: 值}；'
+                '字符串数组中的每个键都对应同一个完整值，空键数组输出空字典。'
+                '键按字面文本使用，不解析路径或 JSON；值保留原始类型，数组值也不拆分。'
+                '重复键报错；不提取字段、不修改已有容器、不深拷贝值。'
+            ),
+            inputs=[
+                io.MultiType.Input(io.String.Input("key", default="key"), types=[io.String, io.Array],
+                                   display_name="键",
+                                   tooltip='填写一个键名，或连接字符串/字符串数组。数组内每个键使用同一个完整值；空字符串也是合法键名。'),
+                io.AnyType.Input("value", display_name="值",
+                                 tooltip='作为键对应的完整值，可为文本、数字、布尔值、null、对象、数组或其他原生值。'),
+            ],
+            outputs=[io.Dict.Output(display_name="字典")],
+        )
+
+    @classmethod
+    def execute(cls, key, value):
+        keys = [key] if isinstance(key, str) else key
+        if not isinstance(keys, list) or any(not isinstance(item, str) for item in keys):
+            raise ValueError("键需要是字符串或字符串数组；请先将其他类型转换为文本。")
+        result = {}
+        for item in keys:
+            if item in result:
+                raise ValueError(f"键重复，不能在一个字典中重复组装：{item!r}。")
+            result[item] = value
         return io.NodeOutput(result)
 
 

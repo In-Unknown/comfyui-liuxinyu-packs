@@ -2,7 +2,7 @@
 
 面向日常工作流的图片、长图、文件路径、字符串、数学和分包子流工具。适合多目录详情页整理、长图切分与拼接、批次图片挑选保存、提示词组合，以及把多步处理限制在同一个对象范围内。
 
-当前包含 **63 个用户节点**，另有 **5 个由分包与条件循环功能自动创建的内部节点**。下方按用途完整列出名称、用途和节点 ID。中文名称可直接在 ComfyUI 添加节点的搜索框中查找，ID 用于识别 API 工作流和错误报告。
+当前包含 **69 个用户节点**，另有 **5 个由分包与条件循环功能自动创建的内部节点**。下方按用途完整列出名称、用途和节点 ID。中文名称可直接在 ComfyUI 添加节点的搜索框中查找，ID 用于识别 API 工作流和错误报告。
 
 ## 阅读导航
 
@@ -12,6 +12,7 @@
 - [全部节点目录](#全部节点目录)
 - [数组、执行列表和图片批次](#数组执行列表和图片批次)
 - [典型工作流与分包使用场景](#典型工作流与分包使用场景)
+- [记录数组与路径字段处理](#记录数组与路径字段处理)
 - [缓存、预览与文件保存](#缓存预览与文件保存)
 - [常见问题排查](#常见问题排查)
 - [开发与问题反馈](#开发与问题反馈)
@@ -86,9 +87,9 @@ git pull --ff-only
 | [长图切分](#长图切分3个) | 3 | 观察切点、检查边界、正式裁切 |
 | [图片信息与像素](#图片信息与像素3个) | 3 | 图像统计、像素读写 |
 | [字符串与模板](#字符串与模板12个) | 12 | 文本拆合、排序、组合及预览 |
-| [类型转换、数组与执行列表](#类型转换数组与执行列表12个) | 12 | JSON、字面量、数字，执行列表收集、顺合与 JSONata 变换 |
+| [类型转换、数组与执行列表](#类型转换数组与执行列表19个) | 19 | JSON 与字段校验、路径读取与插入、类型转换、执行列表收集与结构化变换 |
 | [数学与函数采样](#数学与函数采样11个) | 11 | 多输入计算、整数运算与数列 |
-| [分包子流与条件循环](#分包子流与条件循环5个) | 5 | 逐个对象独立处理，或比较数据并按条件反复更新 |
+| [分包子流与条件循环](#分包子流与条件循环6个) | 6 | 逐个对象独立处理，或比较数据并按条件反复更新 |
 | [任务内存控制](#任务内存控制2个) | 2 | 暂停或恢复当前任务的逐步 RAM 检查与回收 |
 | [系统命令](#系统命令1个) | 1 | 在 Windows 主机运行 cmd |
 
@@ -149,7 +150,7 @@ git pull --ff-only
 | [预览参数组合或字符串数组](docs/LiuxinyuPreviewText.md) | 表格或文本方式浏览参数组合、字符串列表及单条文本，无输出。 | `LiuxinyuPreviewText` |
 | [预览JS对象或数组](docs/LiuxinyuPreviewJSObject.md) | 树状展开对象/数组，查看类型、下标和值，可复制 JSON，无输出。 | `LiuxinyuPreviewJSObject` |
 
-### 类型转换、数组与执行列表（14个）
+### 类型转换、数组与执行列表（19个）
 
 | 节点 | 用途与关键行为 | 节点 ID |
 | --- | --- | --- |
@@ -164,9 +165,15 @@ git pull --ff-only
 | [批量任意为执行列表](docs/LiuxinyuRepeatAnyToExecutionList.md) | 将任意值整体重复 N 次，不拆图片批次、不深拷贝张量，N=0 输出空列表。 | `LiuxinyuRepeatAnyToExecutionList` |
 | [将任意数组转为执行列表](docs/LiuxinyuArrayToExecutionList.md) | 直接将数组第一层元素逐项输出，保留类型、顺序和对象引用，空数组输出零项。 | `LiuxinyuArrayToExecutionList` |
 | [插入字段到字典或者js对象](docs/LiuxinyuInsertJSObject.md) | 按点号和下标定位；字典插入键值对，数组追加一个任意值，返回完整结构且不修改输入。 | `LiuxinyuInsertJSObject` |
+| [解析并校验 JSON 记录数组](docs/LiuxinyuParseJSONRecords.md) | 解析并检查对象数组，输出数据、是否通过和错误信息；校验失败由下游选择停止、备用数据或重试。 | `LiuxinyuParseJSONRecords` |
+| [可遍历字典的索引列表](docs/LiuxinyuArrayObjectPaths.md) | 按层数及字段/数组开关列出停止处的路径；同时输出完整索引数组和执行列表。 | `LiuxinyuArrayObjectPaths` |
+| [组装键值对](docs/LiuxinyuBuildKeyValuePairs.md) | 用键和值创建新字典；多个键可共用一个完整值，保留值类型，不提取字段或修改原容器。 | `LiuxinyuBuildKeyValuePairs` |
+| [并和数组中的字典字段为字典](docs/LiuxinyuMergeDictionaryArray.md) | 把字典数组的第一层字段合成一个新字典；空数组输出空字典，重复键报错，值类型原样保留。 | `LiuxinyuMergeDictionaryArray` |
+| [分包跳回](docs/LiuxinyuPacketReturnStart.md) | 逐包执行，携带上一轮完整数据；空包跳过，耗尽后可复用最后一包。 | `LiuxinyuPacketReturnStart` |
+| [携包条件回归](docs/LiuxinyuPacketReturnEnd.md) | 将还有下一包与输入布尔做六种逻辑运算；true 回归，false 输出最终数据。 | `LiuxinyuPacketReturnEnd` |
 | [执行列表收集为数组](docs/LiuxinyuCollectExecutionList.md) | 把完整执行列表收集为一个数组，保留顺序和嵌套数组，不展开数组元素。 | `LiuxinyuCollectExecutionList` |
 | [顺合任意执行列表](docs/LiuxinyuConcatAnyExecutionLists.md) | 按输入口从上到下的顺序将各路执行列表首尾相接，保留内部顺序、重复项和类型，不递归拆分数组或图片批次；可串联继续顺合。 | `LiuxinyuConcatAnyExecutionLists` |
-| [结构化数据变换（JSONata）](docs/LiuxinyuStructuredTransform.md) | 用 JSONata 表达式查询、分组、关联或变换 JSON 数据；输入经 data0、data1 等访问，可增至 100 路。需在 ComfyUI Python 中安装 `jsonata-python==0.6.3`。 | `LiuxinyuStructuredTransform` |
+| [结构化数据变换（JSONata）](docs/LiuxinyuStructuredTransform.md) | 用 JSONata 处理最多 100 路 JSON 数据，声明并严格检查结果类型；单一结果出口，另有执行成功与错误信息。需安装 `jsonata-python==0.6.3`。 | `LiuxinyuStructuredTransform` |
 
 ### 数学与函数采样（11个）
 
@@ -184,7 +191,7 @@ git pull --ff-only
 | [双曲与反双曲函数](docs/LiuxinyuHyperbolic.md) | 双曲或反双曲函数，输入需满足相应定义域。 | `LiuxinyuHyperbolic` |
 | [函数生成精度数列](docs/LiuxinyuFunctionGrid.md) | 解析表达式和变量，按范围、间隔与小数位采样，输出多维数列和坐标；表达式中的三角函数使用弧度。 | `LiuxinyuFunctionGrid` |
 
-### 分包子流与条件循环（5个）
+### 分包子流与条件循环（6个）
 
 | 节点 | 用途与关键行为 | 节点 ID |
 | --- | --- | --- |
@@ -193,6 +200,7 @@ git pull --ff-only
 | [跳回点](docs/LiuxinyuReturnPoint.md) | 提供初始数据与调回句柄，将回归数据作为下一轮输入。 | `LiuxinyuReturnPoint` |
 | [条件回归](docs/LiuxinyuConditionalReturn.md) | 按句柄复制数据端口与类型；true 携带本轮数据跳回再执行一轮，false 离开循环、输出本轮结果并执行下游。 | `LiuxinyuConditionalReturn` |
 | [判断哈希相等](docs/LiuxinyuHashEqual.md) | 比较两份数据的类型、SHA-256、MD5 并精确复核内容，返回单个布尔值。 | `LiuxinyuHashEqual` |
+| [条件为真时报错停止](docs/LiuxinyuRaiseIf.md) | true 按指定错误信息停止当前执行，false 放行；可接入下游依赖来等待检查。 | `LiuxinyuRaiseIf` |
 
 ### 任务内存控制（2个）
 
@@ -284,6 +292,12 @@ git pull --ff-only
 ```
 
 候选可接字符串列表，或输入标准 JSON 数组文本，如 `["红色","蓝色"]`。模板填 `{t1}的{t2}`，两组各两项得到四种组合。普通文本中的逗号/换行不会自动成为多个候选；组合数量是各组长度的乘积，先用少量候选确认。
+
+## 记录数组与路径字段处理
+
+需要接收记录、读取多个位置或给对象补字段时，可按当前数据形状选择工具。文本解析、列出记录路径、展开赋值方案、多项读取和批量插入均可独立使用；输入来源与后续用途由工作流决定。
+
+[记录数组与路径字段处理指南](docs/ObjectRecordTools.md)提供选用对照、完整数组与执行列表的区别，以及从任务分配到完整结果的连线示例。上方目录中的五篇独立帮助页分别说明全部参数、默认值、输入输出形状、空输入、重复路径与报错边界。
 
 ## 缓存、预览与文件保存
 
