@@ -73,7 +73,7 @@ class RepeatTests(unittest.TestCase):
         value = [1, 2]
         for count in (1, 3):
             output = run_node([value], [count])
-            columns, packets = packet_columns({"value0": output}, execution_lists={"value0"})
+            columns, packets = packet_columns({"value0": output})
             self.assertEqual(packets, count)
             self.assertTrue(all(item is value for item in columns[0]))
 

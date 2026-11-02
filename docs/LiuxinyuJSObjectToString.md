@@ -32,3 +32,9 @@
 - 把对象文本化后接[字符串拼接](LiuxinyuStringConcatenate.md)或保存类节点。
 - 与[字符串转为JS对象](LiuxinyuStringToJSObject.md)往返配合；含中文的对象走本节点可避免转义。
 - 参数组合转成 JSON 文本后便于调试，逐条查看 t1、t2…的取值。
+
+## 接入 JSON 文本模板
+
+把完整分组对象和完整记录字典分别经本节点转为 JSON 文本后，可接[从模板生成文本](LiuxinyuTextFromTemplate.md)的 t1、t2，模板填写 `{"group":{t1},"records":{t2}}`。占位符外不用再加引号；替换结果内部保留两个对象，整个结果通过 STRING 输出。
+
+字符串输入原样通过，因此本节点不能用于给任意普通字符串补 JSON 引号或转义。若输入已经是序列化的对象文本，也不会再次套字符串引号。

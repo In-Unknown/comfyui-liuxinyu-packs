@@ -15,6 +15,7 @@ import nodes
 import packet_return
 import packet_tasks
 import conditional_loop
+from execution_list_node import LiuxinyuArrayToExecutionList
 from comfy_api.latest import io
 from comfy.model_management import InterruptProcessingException
 
@@ -71,8 +72,9 @@ def node(kind, **inputs): return {"class_type": kind, "inputs": inputs}
 def graph(packets=(1, 2, 3), operation="与", until=100):
     return {
         "packets": node("CarryTestValue", box={"value": list(packets)}),
+        "list": node("LiuxinyuArrayToExecutionList", array=["packets", 0]),
         "seed": node("CarryTestValue", box={"value": []}),
-        "start": node("LiuxinyuPacketReturnStart", **{"packets.packet0": ["packets", 0], "states.state0": ["seed", 0]}),
+        "start": node("LiuxinyuPacketReturnStart", **{"packets.packet0": ["list", 0], "states.state0": ["seed", 0]}),
         "body": node("CarryTestAppend", packet=["start", 2], state=["start", 1], round=["start", 3], until=until),
         "end": node("LiuxinyuPacketReturnEnd", handle=["start", 0], condition=["body", 1], operation=operation,
                     **{"states.state0": ["body", 0]}),
@@ -83,7 +85,7 @@ def graph(packets=(1, 2, 3), operation="与", until=100):
 class PacketReturnTests(unittest.TestCase):
     def setUp(self):
         EVENTS.clear()
-        classes = [Value, ListValue, Append, Capture]
+        classes = [Value, ListValue, Append, Capture, LiuxinyuArrayToExecutionList]
         for module in (packet_return, packet_tasks, conditional_loop):
             classes += [v for v in vars(module).values() if isinstance(v, type) and issubclass(v, io.ComfyNode)]
         self.patcher = patch.dict(nodes.NODE_CLASS_MAPPINGS, {c.define_schema().node_id: c for c in classes})
@@ -157,11 +159,13 @@ class PacketReturnTests(unittest.TestCase):
         for source, data in (("CarryTestValue", [[1, 2], [3]]), ("CarryTestList", [[1, 2]])):
             prompt = graph(packets=data)
             prompt["packets"]["class_type"] = source
+            if source == 'CarryTestList':
+                prompt['start']['inputs']['packets.packet0'] = ['packets', 0]
             self.assertEqual(self.output(prompt), data)
 
     def test_multiple_columns_and_states(self):
         prompt = graph()
-        prompt["short"] = node("CarryTestValue", box={"value": [10, 20]})
+        prompt["short"] = node("CarryTestList", box={"value": [10, 20]})
         prompt["seed2"] = node("CarryTestValue", box={"value": []})
         prompt["start"]["inputs"].update({"packets.packet1": ["short", 0], "states.state1": ["seed2", 0]})
         prompt["body"]["inputs"].update(packet=["start", 3], round=["start", 5])
@@ -178,7 +182,7 @@ class PacketReturnTests(unittest.TestCase):
             prompt = graph()
             if mode == "missing": del prompt["end"]["inputs"]["states.state0"]
             else:
-                prompt["empty"] = node("CarryTestValue", box={"value": []})
+                prompt["empty"] = node("CarryTestList", box={"value": []})
                 prompt["start"]["inputs"]["packets.packet1"] = ["empty", 0]
             with self.subTest(mode=mode): self.run_graph(prompt, success=False)
 
@@ -206,13 +210,25 @@ class PacketReturnTests(unittest.TestCase):
 
     def test_nested_carried_loops(self):
         prompt = graph(packets=[[1, 2], [3]])
-        prompt["inner"] = node("LiuxinyuPacketReturnStart", **{"packets.packet0": ["start", 2], "states.state0": ["start", 1]})
+        prompt["inner_list"] = node("LiuxinyuArrayToExecutionList", array=["start", 2])
+        prompt["inner"] = node("LiuxinyuPacketReturnStart", **{"packets.packet0": ["inner_list", 0], "states.state0": ["start", 1]})
         for key in ("packet", "state", "round"):
             prompt["body"]["inputs"][key][0] = "inner"
         prompt["inner_end"] = node("LiuxinyuPacketReturnEnd", handle=["inner", 0], condition=True,
                                   operation="与", **{"states.state0": ["body", 0]})
         prompt["end"]["inputs"].update(condition=True, **{"states.state0": ["inner_end", 0]})
         self.assertEqual(self.output(prompt), [1, 2, 3])
+
+    def test_plain_packet_array_is_rejected_but_state_array_is_valid(self):
+        for value in ([], [1], [1, 2], [[1, 2]], 42, {'a': 1}):
+            with self.subTest(value=value):
+                prompt = graph()
+                prompt['packets']['inputs']['box']['value'] = value
+                prompt['start']['inputs']['packets.packet0'] = ['packets', 0]
+                result = self.run_graph(prompt, success=False)
+                errors = [msg[1]['exception_message'] for msg in result.status_messages if msg[0] == 'execution_error']
+                self.assertIn('将任意数组转为执行列表', errors[0])
+                self.assertEqual(EVENTS, [])
 
 
 if __name__ == "__main__": unittest.main()

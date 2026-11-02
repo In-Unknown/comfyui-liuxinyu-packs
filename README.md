@@ -2,7 +2,7 @@
 
 面向日常工作流的图片、长图、文件路径、字符串、数学和分包子流工具。适合多目录详情页整理、长图切分与拼接、批次图片挑选保存、提示词组合，以及把多步处理限制在同一个对象范围内。
 
-当前包含 **69 个用户节点**，另有 **5 个由分包与条件循环功能自动创建的内部节点**。下方按用途完整列出名称、用途和节点 ID。中文名称可直接在 ComfyUI 添加节点的搜索框中查找，ID 用于识别 API 工作流和错误报告。
+当前包含 **70 个用户节点**，另有 **7 个由分包与条件循环功能自动创建的内部节点**。下方按用途完整列出名称、用途和节点 ID。中文名称可直接在 ComfyUI 添加节点的搜索框中查找，ID 用于识别 API 工作流和错误报告。
 
 ## 阅读导航
 
@@ -58,6 +58,8 @@ git pull --ff-only
 
 更新 Python 后重启 ComfyUI；更新 JS 后刷新浏览器，仍显示旧界面时再强制刷新。只修改 Markdown 帮助文档通常不需要重启后端。
 
+本包会在画布所有节点框外的底部左侧显示 `ID: 522` 这样的标记，对应工作流 JSON 中该节点的 `id`。普通节点、子图节点和子图内部节点均显示；复制节点后显示新 ID。标记只用于定位，不改变节点标题、尺寸或保存内容。
+
 ## 快速上手
 
 ### 先确认文本节点能运行
@@ -87,7 +89,7 @@ git pull --ff-only
 | [长图切分](#长图切分3个) | 3 | 观察切点、检查边界、正式裁切 |
 | [图片信息与像素](#图片信息与像素3个) | 3 | 图像统计、像素读写 |
 | [字符串与模板](#字符串与模板12个) | 12 | 文本拆合、排序、组合及预览 |
-| [类型转换、数组与执行列表](#类型转换数组与执行列表19个) | 19 | JSON 与字段校验、路径读取与插入、类型转换、执行列表收集与结构化变换 |
+| [类型转换、数组与执行列表](#类型转换数组与执行列表20个) | 20 | JSON 与字段校验、路径读取与插入、类型转换、执行列表收集与结构化变换 |
 | [数学与函数采样](#数学与函数采样11个) | 11 | 多输入计算、整数运算与数列 |
 | [分包子流与条件循环](#分包子流与条件循环6个) | 6 | 逐个对象独立处理，或比较数据并按条件反复更新 |
 | [任务内存控制](#任务内存控制2个) | 2 | 暂停或恢复当前任务的逐步 RAM 检查与回收 |
@@ -150,7 +152,7 @@ git pull --ff-only
 | [预览参数组合或字符串数组](docs/LiuxinyuPreviewText.md) | 表格或文本方式浏览参数组合、字符串列表及单条文本，无输出。 | `LiuxinyuPreviewText` |
 | [预览JS对象或数组](docs/LiuxinyuPreviewJSObject.md) | 树状展开对象/数组，查看类型、下标和值，可复制 JSON，无输出。 | `LiuxinyuPreviewJSObject` |
 
-### 类型转换、数组与执行列表（19个）
+### 类型转换、数组与执行列表（20个）
 
 | 节点 | 用途与关键行为 | 节点 ID |
 | --- | --- | --- |
@@ -165,11 +167,11 @@ git pull --ff-only
 | [批量任意为执行列表](docs/LiuxinyuRepeatAnyToExecutionList.md) | 将任意值整体重复 N 次，不拆图片批次、不深拷贝张量，N=0 输出空列表。 | `LiuxinyuRepeatAnyToExecutionList` |
 | [将任意数组转为执行列表](docs/LiuxinyuArrayToExecutionList.md) | 直接将数组第一层元素逐项输出，保留类型、顺序和对象引用，空数组输出零项。 | `LiuxinyuArrayToExecutionList` |
 | [插入字段到字典或者js对象](docs/LiuxinyuInsertJSObject.md) | 按点号和下标定位；字典插入键值对，数组追加一个任意值，返回完整结构且不修改输入。 | `LiuxinyuInsertJSObject` |
-| [解析并校验 JSON 记录数组](docs/LiuxinyuParseJSONRecords.md) | 解析并检查对象数组，输出数据、是否通过和错误信息；校验失败由下游选择停止、备用数据或重试。 | `LiuxinyuParseJSONRecords` |
+| [解析并校验 JSON 记录数组](docs/LiuxinyuParseJSONRecords.md) | 解析并检查对象数组；类型错误定位到记录、字段及数组元素，说明期望类型与实际值。输出数据、是否通过和错误信息，由下游选择停止、备用数据或重试。 | `LiuxinyuParseJSONRecords` |
 | [可遍历字典的索引列表](docs/LiuxinyuArrayObjectPaths.md) | 按层数及字段/数组开关列出停止处的路径；同时输出完整索引数组和执行列表。 | `LiuxinyuArrayObjectPaths` |
 | [组装键值对](docs/LiuxinyuBuildKeyValuePairs.md) | 用键和值创建新字典；多个键可共用一个完整值，保留值类型，不提取字段或修改原容器。 | `LiuxinyuBuildKeyValuePairs` |
 | [并和数组中的字典字段为字典](docs/LiuxinyuMergeDictionaryArray.md) | 把字典数组的第一层字段合成一个新字典；空数组输出空字典，重复键报错，值类型原样保留。 | `LiuxinyuMergeDictionaryArray` |
-| [分包跳回](docs/LiuxinyuPacketReturnStart.md) | 逐包执行，携带上一轮完整数据；空包跳过，耗尽后可复用最后一包。 | `LiuxinyuPacketReturnStart` |
+| [分包跳回](docs/LiuxinyuPacketReturnStart.md) | 仅对执行列表逐包执行，普通数组须先转换；携带上一轮完整数据；空包跳过，耗尽后可复用最后一包。 | `LiuxinyuPacketReturnStart` |
 | [携包条件回归](docs/LiuxinyuPacketReturnEnd.md) | 将还有下一包与输入布尔做六种逻辑运算；true 回归，false 输出最终数据。 | `LiuxinyuPacketReturnEnd` |
 | [执行列表收集为数组](docs/LiuxinyuCollectExecutionList.md) | 把完整执行列表收集为一个数组，保留顺序和嵌套数组，不展开数组元素。 | `LiuxinyuCollectExecutionList` |
 | [顺合任意执行列表](docs/LiuxinyuConcatAnyExecutionLists.md) | 按输入口从上到下的顺序将各路执行列表首尾相接，保留内部顺序、重复项和类型，不递归拆分数组或图片批次；可串联继续顺合。 | `LiuxinyuConcatAnyExecutionLists` |
@@ -195,7 +197,7 @@ git pull --ff-only
 
 | 节点 | 用途与关键行为 | 节点 ID |
 | --- | --- | --- |
-| [分包执行子流回归](docs/LiuxinyuPacketStart.md) | 按最长输入逐包发出，等待本包子流回归后再发下一包；当前轮次从 1 开始。 | `LiuxinyuPacketStart` |
+| [分包执行子流回归](docs/LiuxinyuPacketStart.md) | 只接受执行列表，普通数组须先转换；按最长列表逐包发出，等待本包回归后再发下一包；当前轮次从 1 开始。 | `LiuxinyuPacketStart` |
 | [回归分包子流条件](docs/LiuxinyuPacketEnd.md) | 等待本包所有接入分支完成，全部包结束后按包顺序汇总各路结果。 | `LiuxinyuPacketEnd` |
 | [跳回点](docs/LiuxinyuReturnPoint.md) | 提供初始数据与调回句柄，将回归数据作为下一轮输入。 | `LiuxinyuReturnPoint` |
 | [条件回归](docs/LiuxinyuConditionalReturn.md) | 按句柄复制数据端口与类型；true 携带本轮数据跳回再执行一轮，false 离开循环、输出本轮结果并执行下游。 | `LiuxinyuConditionalReturn` |
@@ -217,7 +219,7 @@ git pull --ff-only
 | --- | --- | --- |
 | [运行cmd命令](docs/RunCmd.md) | 在 Windows 主机运行单条或多行 cmd，合并返回标准输出和错误输出；可设超时及是否结束进程。 | `RunCmd` |
 
-### 内部调度节点（5个）
+### 内部调度节点（7个）
 
 以下节点标记为开发专用，由分包或条件循环自动创建，**无需手动添加或接线**。列出是为了让节点总数和错误报告中的 ID 都有出处。
 
@@ -228,6 +230,8 @@ git pull --ff-only
 | `LiuxinyuPacketCollect` | 收集当前包各路结果，追加到此前包的结果中。 |
 | `LiuxinyuReturnSource` | 提供当前轮完整数据，保持数组、字典和图片批次。 |
 | `LiuxinyuConditionalStep` | 按布尔条件展开下一轮，或结束并释放条件回归节点。 |
+| `LiuxinyuPacketReturnSource` | 提供携包循环当前轮的完整状态、分包数据和轮次。 |
+| `LiuxinyuPacketReturnStep` | 按继续条件展开携包循环，退出时释放回归节点并交付最后状态。 |
 
 ## 数组、执行列表和图片批次
 
@@ -237,7 +241,7 @@ git pull --ff-only
 | --- | --- | --- |
 | 完整数组 ARRAY | 多个元素作为一个值传递 | “多个数值组成数组”的 `[0.1,0.2]`，一次提供全部切点。 |
 | ComfyUI 执行列表 | 普通下游通常逐项执行，主动收集列表的节点则整体处理 | 匹配路径、长图切片、分包回归结果。 |
-| IMAGE 图片批次 | 一个 `[B,H,W,C]` 张量，批内尺寸一致 | 一个值含四张图片，分包起点仍视为一个整体。 |
+| IMAGE 图片批次 | 一个 `[B,H,W,C]` 张量，批内尺寸一致 | 一个值含四张图片；先转为一个执行项后，分包起点仍视为一个整体。 |
 
 执行列表可以装尺寸不同的图片批次。例如两项列表，每项四张图，总计八张图，但分包起点处理的是两包。“批量任意为执行列表”也只重复整体，不拆开批次。
 
@@ -326,7 +330,7 @@ git pull --ff-only
 | 目录匹配后没有图片 | 检查文件/目录选项、递归、名称匹配或完整路径；目录不存在、无匹配或错误正则可能返回空列表。 |
 | 图片拉伸或提示比例不一致 | 批次要求同尺寸；宽高均0时要求比例一致，只设一边时以第一张图计算统一另一边。保留不同高度时逐文件加载。 |
 | 多个详情页变成一张长图 | 拼接收取了整个列表，将“匹配 → 加载 → 拼接”放进一对分包起点/回归之间。 |
-| 分包没按批次内张数循环 | IMAGE 批次整体算一个值，需先转为逐张图的执行列表或数组；重复节点不负责拆图。 |
+| 分包没按批次内张数循环 | IMAGE 批次整体算一个值，需先转为逐张图的执行列表；重复节点不负责拆图。 |
 | 分包报缺少回归、缺输入或交叉闭合 | 条件直接配对，输出编号对应输入，需等待的分支接回归；嵌套按 A/B/B/A 闭合。 |
 | 切分数组错误或只收到一个切点 | 接“完整字面量”输出；数值切点在0与1之间，对象形式使用 `percent`。 |
 | 切换工作流后缩略图一直模糊 | 等画布停止缩放/平移，检查图片请求及控制台；确认前后端已更新后强制刷新，仍复现时记录操作步骤。 |

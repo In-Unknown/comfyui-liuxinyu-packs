@@ -232,6 +232,18 @@ def _record_field_type(value, kind):
     return type(value) is kinds[kind]
 
 
+def _record_actual_value(value):
+    kinds = {str: "string", int: "integer", float: "number", bool: "boolean", type(None): "null"}
+    if type(value) is list:
+        return f"array，含 {len(value)} 个元素"
+    if type(value) is dict:
+        return f"object，含 {len(value)} 个字段"
+    preview = json.dumps(value[:120] if type(value) is str else value, ensure_ascii=False)
+    if type(value) is str and len(value) > 120:
+        preview += "（仅显示前 120 个字符）"
+    return f"{kinds[type(value)]}，值为 {preview}"
+
+
 class LiuxinyuParseJSONRecords(io.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -242,6 +254,7 @@ class LiuxinyuParseJSONRecords(io.ComfyNode):
                 '从任意来源的文本中选取最后一个 JSON 对象或数组文档，要求结果为对象数组，并逐条检查必需字段与类型。'
                 '支持附带说明和代码围栏；不回退到前面的文档。通过时输出完整数组、true 和空错误信息；'
                 '校验不通过时输出空数组、false 和错误信息，不主动停止执行。由下游决定停止、重试或使用其他数据。'
+                '记录内容错误指出首个失败项、字段路径和实际类型；类型数组还指出失败元素的位置。'
                 '不展开为执行列表，不补字段或自动转换字段类型。'
                 '拒绝重复 JSON 键和非有限数值。字段规则是简单类型映射，不是 JSON Schema；详细规则和示例见同名帮助文档。'
             ),
@@ -253,7 +266,7 @@ class LiuxinyuParseJSONRecords(io.ComfyNode):
                                      tooltip='关闭时，每条记录的字段必须与规则一致；打开时保留额外字段，不检查其类型。必需字段仍不能缺少。')],
             outputs=[io.Array.Output(display_name="已校验记录数组"),
                      io.Boolean.Output(display_name="校验通过"),
-                     io.String.Output(display_name="错误信息")],
+                     io.String.Output(display_name="错误信息", tooltip="首个失败原因；记录类型错误包含位置、期望类型和实际值。数组元素单独定位，长字符串仅预览前 120 个字符。")],
         )
 
     @classmethod
@@ -270,17 +283,27 @@ class LiuxinyuParseJSONRecords(io.ComfyNode):
                 raise ValueError("字段契约需要是字段名到受支持类型的 JSON 对象。")
             rows = _last_json_document(text)
             if not isinstance(rows, list):
-                raise ValueError("JSON 顶层需要是记录数组。")
+                raise ValueError(f"JSON 顶层需要是记录数组。位置 $；实际为 {_record_actual_value(rows)}。")
             for index, row in enumerate(rows):
                 if not isinstance(row, dict):
-                    raise ValueError(f"第 {index + 1} 项需要是对象。")
+                    raise ValueError(f"第 {index + 1} 项需要是对象。位置 $[{index}]；实际为 {_record_actual_value(row)}。")
                 missing = contract.keys() - row.keys()
                 extra = row.keys() - contract.keys()
                 if missing or (extra and not allow_extra):
-                    raise ValueError(f"第 {index + 1} 项字段不符合契约；缺少 {sorted(missing)}，额外 {sorted(extra)}。")
+                    raise ValueError(f"第 {index + 1} 项字段不符合契约；缺少 {sorted(missing)}，额外 {sorted(extra) if not allow_extra else []}。位置 $[{index}]。")
                 for key, kind in contract.items():
                     if not _record_field_type(row[key], kind):
-                        raise ValueError(f"第 {index + 1} 项的 {key!r} 必须是 {kind}。")
+                        actual = row[key]
+                        location = f"$[{index}][{json.dumps(key, ensure_ascii=False)}]"
+                        subject = f"第 {index + 1} 项的 {key!r}"
+                        expected = kind
+                        if kind.endswith("[]") and type(actual) is list:
+                            expected = kind[:-2]
+                            offset, actual = next((i, item) for i, item in enumerate(actual)
+                                                  if not _record_field_type(item, expected))
+                            subject += f" 第 {offset + 1} 个元素"
+                            location += f"[{offset}]"
+                        raise ValueError(f"{subject} 必须是 {expected}。位置 {location}；实际为 {_record_actual_value(actual)}。")
         except (ValueError, TypeError) as error:
             return io.NodeOutput([], False, str(error))
         return io.NodeOutput(rows, True, "")

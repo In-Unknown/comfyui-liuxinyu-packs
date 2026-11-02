@@ -36,3 +36,58 @@
 | `你好{t1}` | t1 未提供 | `你好{t1}` |
 
 模板 `{t1}{t2}` 接参数组合（t1：红、蓝；t2：S、M）时输出四行：红S、红M、蓝S、蓝M。
+
+## 把两份 JSON 文本组合成一份模型输入
+
+模板只替换文本，不会自动加引号、转义内容、解析 JSON 或核对业务字段。若 t1 和 t2 来自对象，分别先接[js对象转换为字符串](LiuxinyuJSObjectToString.md)，再接本节点。
+
+例如 t1 为分组信息：
+
+```json
+{"topic":"承重","definition":"产品承受重量和负载的能力","recordPaths":["[0][0]","[1][0]"]}
+```
+
+t2 为按同一份路径清单读取、组装并合并的记录字典：
+
+```json
+{
+  "[0][0]":{"imageIndex":1,"designAnalysis":"通过多人同时使用，强调承重能力","visualDescription":"多人站在产品上，标注承重数值","topic":"承重"},
+  "[1][0]":{"imageIndex":1,"designAnalysis":"通过重物测试展示承重能力","visualDescription":"产品上堆放重物，旁边标注重量","topic":"承重"}
+}
+```
+
+模板填写：
+
+```text
+{"group":{t1},"records":{t2}}
+```
+
+当两路各有一项时，输出一个字符串执行项，完整文本内容为：
+
+```json
+{
+  "group": {
+    "topic": "承重",
+    "definition": "产品承受重量和负载的能力",
+    "recordPaths": ["[0][0]", "[1][0]"]
+  },
+  "records": {
+    "[0][0]": {
+      "imageIndex": 1,
+      "designAnalysis": "通过多人同时使用，强调承重能力",
+      "visualDescription": "多人站在产品上，标注承重数值",
+      "topic": "承重"
+    },
+    "[1][0]": {
+      "imageIndex": 1,
+      "designAnalysis": "通过重物测试展示承重能力",
+      "visualDescription": "产品上堆放重物，旁边标注重量",
+      "topic": "承重"
+    }
+  }
+}
+```
+
+上例排版便于阅读；实际空格与换行由两段输入文本和模板决定。输出端口是 STRING 执行列表，文本内部的 `group`、`records` 是 JSON 对象。不要将模板写成 `{"group":{t1},"records":"{t2}"}`：对象文本里的引号和换行没有转义，直接套引号会形成无效 JSON。普通字符串若要作为 JSON 字符串值，需要先正确 JSON 编码，不能简单加引号。
+
+本场景中 `records` 的键应与 `group.recordPaths` 一致；模板节点不会检查或修正不一致的路径，也不会重新读取记录。`imageIndex` 是业务字段，不决定记录所在的数组下标。路径读取与合并接法见[记录数组与路径字段处理](ObjectRecordTools.md)。

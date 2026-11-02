@@ -13,6 +13,8 @@ function harness({ savedAt = 1000, modified = 2000, server = graph('server'), st
   const listeners = {};
   const actions = { draft: [], workflow: [] };
   const timers = new Map();
+  const frames = [];
+  const intervals = [];
   const dialogs = [];
   const requests = [];
   const loads = [];
@@ -72,6 +74,7 @@ function harness({ savedAt = 1000, modified = 2000, server = graph('server'), st
       append(...children) { this.children.push(...children); },
       setAttribute() {},
       addEventListener(name, cb) { events[name] = cb; },
+      dispatchEvent(event) { events[event.type]?.(event); },
       showModal() { dialogs.push(this); },
       close(value = '') { if (this.closed) return; this.closed = true; this.returnValue = value; events.close?.(); },
       remove() {},
@@ -109,24 +112,33 @@ function harness({ savedAt = 1000, modified = 2000, server = graph('server'), st
       // Native activation takes its baseline before afterLoadGraph extensions
       // and the final model/media pipeline have finished normalizing nodes.
       if (state.normalizeAfterLoad) state.canvas.nodes[0].properties = { initialized: true };
+      state.afterLoad?.({ frames, canvas: state.canvas });
       return true;
     },
   };
   class TestDate extends Date { static now() { return now; } }
+  const document = { createElement: element, body: { append() {} }, visibilityState: 'visible' };
   vm.runInNewContext(source, {
     app, api, Date: TestDate,
     localStorage: { getItem: (k) => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, v) },
-    document: { createElement: element, body: { append() {} } },
+    document,
     window: { addEventListener(name, cb) { listeners[name] = cb; } },
     console: { warn() {} },
     setTimeout(cb) { const id = ++nextTimer; timers.set(id, cb); return id; },
     clearTimeout(id) { timers.delete(id); },
+    setInterval(cb) { intervals.push(cb); return intervals.length; },
+    requestAnimationFrame(cb) { frames.push(cb); },
   });
   extension.setup();
   async function flush() {
     for (let i = 0; i < 8; i++) {
       const batch = [...timers.values()]; timers.clear(); batch.forEach((cb) => cb());
       await new Promise(setImmediate);
+      // Native callbacks can enqueue microtasks that propagate socket types.
+      for (const callback of frames.splice(0)) {
+        callback();
+        await Promise.resolve();
+      }
     }
   }
   async function restore() {
@@ -138,8 +150,131 @@ function harness({ savedAt = 1000, modified = 2000, server = graph('server'), st
     await flush();
   }
   return { extension, workflow, workflows, drafts, payloads, state, storage,
-    dialogs, requests, loads, warnings, listeners, actions, restore, flush };
+    dialogs, requests, loads, warnings, listeners, actions, restore, flush, intervals, document, frames };
 }
+
+test('sync waits for native match-type frames and real JSONata propagation before marking saved', async () => {
+  const jsonTypes = 'DICT,ARRAY,STRING,INT,FLOAT,BOOLEAN,NULL';
+  const server = { nodes: [], links: [], definitions: { subgraphs: [{ id: 'sub', nodes: [
+    { id: 539, type: 'ComfySwitchNode', inputs: [{ type: '*' }], outputs: [{ type: '*' }] },
+    { id: 543, type: 'LiuxinyuStructuredTransform',
+      inputs: [{ name: 'sources.data0', type: jsonTypes, label: 'data0 · JSON', link: 1 }],
+      outputs: [{ type: 'DICT', label: '结果 · DICT' }], widgets_values: ['original expression'] },
+  ] }] } };
+  const h = harness({ server });
+  let structured;
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../structured_data.js'), 'utf8')
+    .replace(/^import .*;\r?\n/gm, ''), {
+    app: { registerExtension(e) { structured = e; } }, queueMicrotask,
+  });
+  let initialized = false;
+  h.state.afterLoad = ({ frames, canvas }) => {
+    const [sw, jsonata] = canvas.definitions.subgraphs[0].nodes;
+    const node = { comfyClass: 'LiuxinyuStructuredTransform', inputs: jsonata.inputs,
+      outputs: jsonata.outputs, widgets: [{ name: 'result_type', value: '字典' }],
+      graph: { links: new Map([[1, { origin_id: 539, origin_slot: 0 }]]), getNodeById: () => sw },
+      setDirtyCanvas() {}, disconnectInput() { assert.fail('valid ARRAY cable must survive'); },
+    };
+    structured.nodeCreated(node);
+    // Native applyMatchType schedules its onConnectionsChange in rAF, not
+    // inside the awaited graph load. Its downstream is the real package code.
+    frames.push(() => {
+      sw.inputs[0].type = sw.outputs[0].type = 'ARRAY';
+      node.onConnectionsChange(1, 0, true);
+      frames.push(() => { initialized = true; });
+    });
+  };
+  await h.restore();
+  const dialog = h.dialogs[0];
+  const [keep, sync] = dialog.children.at(-1).children;
+  sync.onclick();
+  assert.equal(dialog.closed, false, 'canvas remains modal while loading');
+  assert.equal(keep.disabled, true);
+  assert.equal(sync.disabled, true);
+  let cancelled = false;
+  dialog.dispatchEvent({ type: 'cancel', preventDefault() { cancelled = true; } });
+  assert.equal(cancelled, true, 'Esc cannot expose an editable canvas during initialization');
+  await h.flush();
+  assert.equal(initialized, true);
+  assert.equal(dialog.closed, true);
+  assert.equal(h.workflow.isModified, false);
+  const nodes = h.workflow.changeTracker.initialState.definitions.subgraphs[0].nodes;
+  assert.equal(nodes[0].outputs[0].type, 'ARRAY');
+  assert.equal(nodes[1].inputs[0].type, 'ARRAY');
+  assert.equal(nodes[1].inputs[0].label, 'data0 · ARRAY');
+  h.workflow.changeTracker.captureCanvasState(); // blank click / blur
+  assert.equal(h.workflow.isModified, false);
+  h.state.canvas.definitions.subgraphs[0].nodes[1].widgets_values[0] = 'real edit';
+  h.workflow.changeTracker.captureCanvasState();
+  assert.equal(h.workflow.isModified, true);
+  h.state.canvas.definitions.subgraphs[0].nodes[1].widgets_values[0] = 'original expression';
+  h.workflow.changeTracker.captureCanvasState();
+  assert.equal(h.workflow.isModified, false);
+  h.state.canvas.definitions.subgraphs[0].nodes[0].outputs[0].type = 'STRING';
+  h.workflow.changeTracker.captureCanvasState();
+  assert.equal(h.workflow.isModified, true, 'later socket edits are not ignored');
+  assert.equal(server.definitions.subgraphs[0].nodes[0].outputs[0].type, '*', 'file was not rewritten');
+});
+
+test('programmatic workflow change during load frames cannot reset the other workflow or remove its draft', async () => {
+  const h = harness();
+  const before = copy(h.workflow.changeTracker.initialState);
+  h.state.afterLoad = ({ frames }) => frames.push(() => {
+    h.extension.beforeLoadGraph();
+    h.workflows.activeWorkflow = { path: 'workflows/other.json' };
+  });
+  await h.restore();
+  h.dialogs[0].children.at(-1).children[1].onclick();
+  await h.flush();
+  assert.equal(h.dialogs[0].closed, true);
+  assert.equal(h.workflows.activeWorkflow.path, 'workflows/other.json');
+  assert.equal(h.payloads.has(h.workflow.path), true);
+  assert.deepEqual(h.workflow.changeTracker.initialState, h.state.server);
+  assert.notDeepEqual(h.workflow.changeTracker.initialState, before);
+});
+
+test('failed sync closes the busy modal and preserves the cached canvas', async () => {
+  const h = harness(); await h.restore();
+  h.state.failFetch = true;
+  h.dialogs[0].children.at(-1).children[1].onclick();
+  await h.flush();
+  assert.equal(h.dialogs[0].closed, true);
+  assert.deepEqual(h.workflow.activeState, graph('cached'));
+});
+
+test('dirty diagnostics expose delayed layout and real edits without changing graph, draft or baseline', async () => {
+  const h = harness(); await h.restore();
+  h.dialogs[0].close('sync'); await h.flush();
+  h.state.canvas.nodes[0].size = [200, 140];
+  h.workflow.changeTracker.captureCanvasState();
+  h.state.canvas.nodes[0].widgets_values[0] = 'edited after capture';
+  const before = JSON.stringify({ workflow: h.workflow, canvas: h.state.canvas,
+    drafts: [...h.payloads], storage: [...h.storage], requests: h.requests });
+  h.extension.getCanvasMenuItems().find(item => item.content === '查看未保存差异').callback();
+  const report = h.dialogs.at(-1).children.find(child => child.tag === 'textarea');
+  assert.equal(report.readOnly, true);
+  assert.match(report.value, /nodes\[id=1\]\.size/);
+  assert.match(report.value, /nodes\[id=1\]\.widgets_values\.0/);
+  assert.match(report.value, /edited after capture/);
+  assert.equal(JSON.stringify({ workflow: h.workflow, canvas: h.state.canvas,
+    drafts: [...h.payloads], storage: [...h.storage], requests: h.requests }), before);
+});
+
+test('diagnostics ignore root viewport and node ordering but retain subgraph viewport differences', async () => {
+  const h = harness({ modified: 900 });
+  const baseline = { nodes: [{id: 1}, {id: 2}], extra: {},
+    definitions: { subgraphs: [{ id: 'sub', extra: { ds: { scale: 1 } } }] } };
+  h.workflow.changeTracker.initialState = copy(baseline);
+  h.workflow.activeState = copy(baseline);
+  h.workflow.activeState.nodes.reverse();
+  h.workflow.activeState.extra.ds = { scale: 2 };
+  h.state.canvas = copy(h.workflow.activeState);
+  h.state.canvas.definitions.subgraphs[0].extra.ds.scale = 3;
+  h.extension.getCanvasMenuItems().find(item => item.content === '查看未保存差异').callback();
+  const report = h.dialogs.at(-1).children.find(child => child.tag === 'textarea').value;
+  assert.match(report, /已保存基准 → 前端已记录状态：\n未发现字段差异。/);
+  assert.match(report, /definitions.subgraphs.0.extra.ds.scale/);
+});
 
 test('restoration is not blocked or replaced; prompt appears afterwards', async () => {
   const h = harness();
@@ -205,6 +340,30 @@ test('a new frontend draft save starts a new time window', async () => {
   h.state.modified = 6000;
   h.listeners.focus(); await h.flush();
   assert.equal(h.dialogs.length, 1);
+});
+
+test('autosave while a decision is pending keeps the dialog and its boundary across refresh', async () => {
+  const h = harness(); await h.restore();
+  h.drafts.saveDraft(h.workflow.path, JSON.stringify(graph('autosaved canvas')), {});
+  await h.flush();
+  assert.equal(h.dialogs[0].closed, false, 'autosave must not close the pending decision');
+  assert.equal(h.dialogs.length, 1);
+  assert.deepEqual(JSON.parse(h.payloads.get(h.workflow.path).data), graph('autosaved canvas'));
+  assert.equal(h.loads.length, 0);
+  const next = harness({storage: h.storage}); await next.restore();
+  assert.equal(next.dialogs.length, 1, 'refresh must still offer the unhandled file revision');
+  h.dialogs[0].close('sync'); await h.flush();
+  assert.deepEqual(h.workflow.activeState, h.state.server);
+});
+
+test('a successful file save still cancels an obsolete pending question', async () => {
+  const h = harness(); await h.restore();
+  h.workflow.lastModified = 6000; h.state.modified = 6000;
+  for (const fn of h.actions.workflow) fn({name:'saveWorkflow',args:[h.workflow],after:cb=>cb()});
+  await h.flush();
+  assert.equal(h.dialogs[0].closed, true);
+  assert.equal(h.dialogs.length, 1);
+  assert.equal(h.loads.length, 0);
 });
 
 test('sync stays saved after normalized canvas is checked again; next real edit is dirty', async () => {
@@ -288,4 +447,48 @@ test('concurrent focus/reconnect checks do not stack duplicate dialogs', async (
   assert.equal(h.dialogs.length, 1);
   h.dialogs[0].close('keep'); await h.flush();
   assert.equal(h.dialogs.length, 1);
+});
+
+test('focus during restoration does not cancel completion and permanently disable checks', async () => {
+  const h = harness();
+  h.extension.beforeLoadGraph();
+  h.extension.afterLoadGraph();
+  h.listeners.focus();
+  await h.flush();
+  assert.equal(h.dialogs.length, 1);
+});
+
+test('restoration cache rewrites do not advance the saved boundary on next startup', async () => {
+  const h = harness({ modified: 900 }); await h.restore();
+  h.storage.set('Comfy.Workflow.DraftIndex.v2:personal', JSON.stringify({ entries: {
+    test: { path: h.workflow.path, updatedAt: 5000, isTemporary: false },
+  } }));
+  const next = harness({ modified: 2000, storage: h.storage });
+  await next.restore();
+  assert.equal(next.dialogs.length, 1);
+});
+
+test('visible page detects a later backend revision after cancelling without a focus event', async () => {
+  const h = harness(); await h.restore();
+  h.dialogs[0].close('keep'); await h.flush();
+  assert.equal(h.intervals.length, 1);
+  h.state.modified = 3000;
+  h.document.visibilityState = 'hidden';
+  const requests = h.requests.length;
+  h.intervals[0](); await h.flush();
+  assert.equal(h.requests.length, requests);
+  h.document.visibilityState = 'visible';
+  h.intervals[0](); await h.flush();
+  assert.equal(h.dialogs.length, 2);
+});
+
+test('manual canvas command offers the same file again after cancelling', async () => {
+  const h = harness(); await h.restore();
+  h.dialogs[0].close('keep'); await h.flush();
+  const menu = h.extension.getCanvasMenuItems();
+  menu[0].callback(); await h.flush();
+  assert.equal(h.dialogs.length, 2);
+  h.dialogs[1].close('sync'); await h.flush();
+  assert.deepEqual(h.workflow.activeState, h.state.server);
+  assert.equal(h.workflow.isModified, false);
 });

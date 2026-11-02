@@ -129,6 +129,15 @@ function tree(graph) {
 app.registerExtension({
   name: "liuxinyu.PacketReturn",
   beforeRegisterNodeDef(nodeType, nodeData) {
+    if (![START, END].includes(nodeData.name)) return;
+    const configure = nodeType.prototype.configure;
+    nodeType.prototype.configure = function (data) {
+      // ComfyNode.configure overlays output names/types by schema index. Our
+      // saved outputs are compact, so seed that layout before the overlay;
+      // otherwise packet sockets become unused state sockets and lose cables.
+      if (data.outputs) this.outputs = data.outputs.map(({links, ...output}) => ({...output}));
+      return configure.apply(this, arguments);
+    };
     if (nodeData.name !== END) return;
     // The server still uses Autogrow to accept state inputs. On the canvas,
     // this group belongs to the paired Start, so it has no independent spare.

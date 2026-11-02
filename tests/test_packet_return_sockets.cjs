@@ -67,7 +67,7 @@ async function main() {
   start.addOutput('当前轮次数','*');
   const end = make('LiuxinyuPacketReturnEnd');
   const definition = {name:end.type,input:{required:{handle:[],condition:[],operation:[],states:['COMFY_AUTOGROW_V3']}}};
-  extension.beforeRegisterNodeDef({},definition);
+  extension.beforeRegisterNodeDef({prototype: {configure() {}}},definition);
   assert.equal('states' in definition.input.required,false);
   end.addInput('handle','LIUXINYU_PACKET_RETURN');
   end.addInput('condition','BOOLEAN',{widget:{name:'condition'}});
@@ -123,6 +123,38 @@ async function main() {
   connect(start,0,end,'handle');await settle();
   assert.deepEqual(endData(end),['states.state0']);assert.deepEqual(names(end),['处理完成数据1']);
   assert.equal(end.widgets[0].value,true);assert.equal(end.widgets[1].value,'与');
-  console.log('Independent port counts, paired-only return sockets, growth/shrink, cable identity, condition wiring and 20 serialization cycles passed.');
+
+  // Real ComfyNode.configure restores reserved output metadata by schema
+  // index, not by saved name. Reloading a compact layout must run that path.
+  class NativeNode {
+    configure(data) {
+      const reserved = ['name', 'type', 'shape', 'localized_name'];
+      const outputs = Array.from({length: Math.max(this.outputs.length, data.outputs.length)}, (_, i) => ({
+        ...data.outputs[i],
+        ...Object.fromEntries(reserved.filter(key => key in (this.outputs[i] || {})).map(key => [key, this.outputs[i][key]])),
+      }));
+      this.outputs = [];
+      for (const output of outputs) this.addOutput(output.name, output.type);
+      this.onConfigure?.();
+    }
+  }
+  extension.beforeRegisterNodeDef(NativeNode, {name: start.type});
+  const reloadPacket = connect(start,slot(start,'当前分包数据2'),sink,'packet');
+  await settle();
+  const saved = {outputs: start.outputs.map(p => ({name: p.name, type: p.type, links: [...p.links]}))};
+  const savedLinks = JSON.stringify([...graph.links.values()]);
+  for (let cycle = 0; cycle < 20; cycle++) {
+    start.outputs = [];
+    start.addOutput('分包回归条件','LIUXINYU_PACKET_RETURN');
+    for (let i=0;i<100;i++) start.addOutput(`当前被处理数据${i+1}`,'*');
+    for (let i=0;i<100;i++) start.addOutput(`当前分包数据${i+1}`,'*');
+    start.addOutput('当前轮次数','*');
+    NativeNode.prototype.configure.call(start, structuredClone(saved));
+    await settle();
+    assert.equal(graph.links.get(reloadPacket)?.origin_slot, 2, 'Native schema restoration must keep the packet cable');
+    assert.equal(JSON.stringify([...graph.links.values()]), savedLinks);
+    assert.deepEqual(names(start), saved.outputs.map(p=>p.name));
+  }
+  console.log('Port growth/shrink, pairing, cable identity, 20 native schema reloads and 20 serialization cycles passed.');
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});

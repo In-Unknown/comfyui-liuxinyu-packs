@@ -20,6 +20,7 @@ import torch
 from comfy_api.latest import io
 import conditional_loop
 import packet_tasks
+from execution_list_node import LiuxinyuRepeatAnyToExecutionList
 from conditional_loop import (
     LiuxinyuConditionalReturn,
     LiuxinyuConditionalStep,
@@ -149,6 +150,7 @@ class ConditionalLoopTests(unittest.TestCase):
     def setUp(self):
         EVENTS.clear()
         classes = [Seed, Advance, StopAdvance, Capture, Payload, ListPayload, ChangePayload, Record,
+                   LiuxinyuRepeatAnyToExecutionList,
                    LiuxinyuReturnPoint, LiuxinyuConditionalReturn, LiuxinyuReturnSource, LiuxinyuConditionalStep]
         classes += [value for value in vars(packet_tasks).values()
                     if isinstance(value, type) and issubclass(value, io.ComfyNode)]
@@ -255,7 +257,8 @@ class ConditionalLoopTests(unittest.TestCase):
 
     def test_packet_outer_feedback_inner(self):
         prompt = workflow()
-        prompt["packet"] = node("LiuxinyuPacketStart", value0=["seed", 0])
+        prompt["seed_list"] = node("LiuxinyuRepeatAnyToExecutionList", value=["seed", 0], count=1)
+        prompt["packet"] = node("LiuxinyuPacketStart", value0=["seed_list", 0])
         prompt["start"]["inputs"]["value0"] = ["packet", 1]
         prompt["packet_end"] = node("LiuxinyuPacketEnd", condition=["packet", 0], value0=["end", 0], value1=["end", 1])
         prompt["out"]["inputs"].update(value=["packet_end", 0], label=["packet_end", 1])

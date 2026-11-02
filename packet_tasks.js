@@ -16,13 +16,11 @@ function updatePacketTypes(node, isStart, inputOffset, outputOffset) {
     const type = source?.outputs?.[cable?.origin_slot]?.type || "*";
     input.type = type;
     input.label = `输入 ${index + 1} · ${type === "*" ? "任意" : type}`;
-    // Packet Start unpacks ARRAY values: the element type is not the ARRAY
-    // container type. Execution lists of IMAGE/STRING/etc retain their type.
-    const unpackedArray = isStart && String(type).split(",").some(value => value.trim() === "ARRAY");
-    const outputType = unpackedArray ? "*" : type;
+    // Each execution item keeps its type, including array-valued items.
+    const outputType = type;
     const output = node.outputs[index + outputOffset];
     if (!output || output.name === ROUND_NAME) return;
-    output.label = `输出 ${index + 1} · ${unpackedArray ? "任意（数组元素）" : outputType === "*" ? "任意" : outputType}`;
+    output.label = `输出 ${index + 1} · ${outputType === "*" ? "任意" : outputType}`;
     if (output.type === outputType) return;
     output.type = outputType;
     for (const id of [...(output.links || [])]) {

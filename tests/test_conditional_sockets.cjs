@@ -180,15 +180,16 @@ async function main() {
   collected.onConfigure(); packets.onConfigure(); extension.afterConfigureGraph();
   await settle();
   assert.equal(returned.outputs[0].type, "INT");
-  // ARRAY containers are unpacked only by Start, and remain whole at End.
+  // Array-valued execution items remain whole at both Start and End.
   source.addOutput("array", "ARRAY");
+  source.outputs[4].shape = 6;
   packets.disconnectInput(0); collected.disconnectInput(1);
   await settle();
   connect(source, 4, packets, 0); connect(source, 4, collected, 1);
   await settle();
   assert.equal(packets.inputs[0].type, "ARRAY");
-  assert.equal(packets.outputs[1].type, "*");
-  assert.equal(packets.outputs[1].label, "输出 1 · 任意（数组元素）");
+  assert.equal(packets.outputs[1].type, "ARRAY");
+  assert.equal(packets.outputs[1].label, "输出 1 · ARRAY");
   assert.equal(collected.outputs[0].type, "ARRAY");
   assert.equal(returned.inputs[2].type, "ARRAY");
   // Memory controls grow beyond 100 pairs and reuse the same type propagation.

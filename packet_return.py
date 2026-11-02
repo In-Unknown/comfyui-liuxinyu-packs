@@ -6,6 +6,7 @@ from comfy_api.latest import io
 from comfy.model_management import throw_exception_if_processing_interrupted
 from comfy_execution.graph_utils import GraphBuilder, is_link
 from comfy_execution.validation import validate_node_input
+from liuxinyu_execution_lists import require_execution_list
 
 
 LIMIT = io.Autogrow._MaxNames
@@ -68,7 +69,7 @@ class LiuxinyuPacketReturnStart(io.ComfyNode):
     def define_schema(cls):
         return io.Schema(
             node_id="LiuxinyuPacketReturnStart", display_name="分包跳回", category="liuxinyu/流程控制",
-            description="逐包执行，同时传递上一轮处理后的完整数据。分包数据按项取出，被处理数据不拆包。"
+            description="逐包执行，同时传递上一轮处理后的完整数据。分包数据只接受执行列表，数组须先接「将任意数组转为执行列表」。被处理数据不拆包。"
                         "分包回归条件直接连接携包条件回归。空包跳过循环并输出初始数据；耗尽后仍回归则复用最后一包。",
             inputs=[growing("states", "state", "被处理数据"), growing("packets", "packet", "分包数据")],
             outputs=start_outputs(), is_input_list=True, enable_expand=True, loop_boundary="start",
@@ -89,13 +90,7 @@ class LiuxinyuPacketReturnStart(io.ComfyNode):
         columns = {}
         for name, items in packets.items():
             upstream_link = start["inputs"].get(f"packets.{name}")
-            execution_list = False
-            if is_link(upstream_link):
-                upstream = nodes.NODE_CLASS_MAPPINGS[prompt.get_node(upstream_link[0])["class_type"]]
-                flags = getattr(upstream, "OUTPUT_IS_LIST", ())
-                execution_list = upstream_link[1] < len(flags) and flags[upstream_link[1]]
-            if not execution_list and len(items) == 1 and isinstance(items[0], (list, tuple)):
-                items = items[0]
+            require_execution_list(prompt, upstream_link, f"分包数据{int(name.removeprefix('packet')) + 1}")
             columns[name] = items
         count = max(map(len, columns.values()))
         if count and any(not column for column in columns.values()):

@@ -16,6 +16,7 @@ sys.path.insert(0, str(PACK))
 import execution
 import nodes
 import packet_tasks
+from execution_list_node import LiuxinyuArrayToExecutionList, LiuxinyuRepeatAnyToExecutionList
 from PIL import Image
 import torch
 from aiohttp import web
@@ -141,7 +142,8 @@ def node(kind, **inputs):
 def workflow(values=(1, 2, 3), list_source=False):
     return {
         "values": node("PacketTestListValues" if list_source else "PacketTestValues", payload={"value": list(values)}),
-        "start": node("LiuxinyuPacketStart", value0=["values", 0]),
+        "list": node("LiuxinyuArrayToExecutionList", array=["values", 0]),
+        "start": node("LiuxinyuPacketStart", value0=["values" if list_source else "list", 0]),
         "work": node("PacketTestProcess", value=["start", 1], label="work"),
         "end": node("LiuxinyuPacketEnd", condition=["start", 0], value0=["work", 0]),
         "out": node("PacketTestCapture", value0=["end", 0]),
@@ -151,7 +153,8 @@ def workflow(values=(1, 2, 3), list_source=False):
 class PacketTests(unittest.TestCase):
     def setUp(self):
         EVENTS.clear()
-        classes = [Values, ListValues, Process, Slow, FanOut, Group, Capture, Expand]
+        classes = [Values, ListValues, Process, Slow, FanOut, Group, Capture, Expand,
+                   LiuxinyuArrayToExecutionList, LiuxinyuRepeatAnyToExecutionList]
         classes += [value for value in vars(packet_tasks).values()
                     if isinstance(value, type) and issubclass(value, io.ComfyNode)]
         self.mapping = {cls.define_schema().node_id: cls for cls in classes}
@@ -178,8 +181,9 @@ class PacketTests(unittest.TestCase):
             with self.subTest(cache=cache):
                 EVENTS.clear()
                 prompt = workflow()
-                prompt["short"] = node("PacketTestValues", payload={"value": [10, 20]})
-                prompt["start"]["inputs"].update(value1=["short", 0], value2="fixed")
+                prompt["short"] = node("PacketTestListValues", payload={"value": [10, 20]})
+                prompt["fixed"] = node("LiuxinyuRepeatAnyToExecutionList", value="fixed", count=1)
+                prompt["start"]["inputs"].update(value1=["short", 0], value2=["fixed", 0])
                 prompt["work"]["inputs"]["other"] = ["start", 2]
                 prompt["end"]["inputs"]["value1"] = ["start", 3]
                 prompt["out"]["inputs"]["value1"] = ["end", 1]
@@ -240,6 +244,7 @@ class PacketTests(unittest.TestCase):
         tensor = torch.zeros(3, 2, 4, 3)
         prompt = workflow()
         prompt["values"]["inputs"]["payload"]["value"] = tensor
+        prompt["list"] = node("LiuxinyuRepeatAnyToExecutionList", value=["values", 0], count=1)
         result = self.run_graph(prompt)
         output = result.history_result["outputs"]["out"]["value0"]
         self.assertEqual(len(output), 1)
@@ -285,7 +290,7 @@ class PacketTests(unittest.TestCase):
         self.assertEqual(EVENTS, [])
         self.assertEqual(result.history_result["outputs"]["out"]["value0"], [])
         prompt = workflow()
-        prompt["empty"] = node("PacketTestValues", payload={"value": []})
+        prompt["empty"] = node("PacketTestListValues", payload={"value": []})
         prompt["start"]["inputs"]["value1"] = ["empty", 0]
         self.run_graph(prompt, success=False)
         self.assertEqual(EVENTS, [])
@@ -309,7 +314,8 @@ class PacketTests(unittest.TestCase):
 
     def test_nested_pairs(self):
         prompt = workflow([1, 2])
-        prompt["inner"] = node("LiuxinyuPacketStart", value0=["start", 1], value1=["values", 0])
+        prompt["repeat"] = node("LiuxinyuRepeatAnyToExecutionList", value=["start", 1], count=1)
+        prompt["inner"] = node("LiuxinyuPacketStart", value0=["repeat", 0], value1=["list", 0])
         prompt["work"]["inputs"]["value"] = ["inner", 2]
         prompt["work"]["inputs"]["other"] = ["inner", 1]
         prompt["inner_end"] = node("LiuxinyuPacketEnd", condition=["inner", 0], value0=["work", 0])
@@ -325,7 +331,8 @@ class PacketTests(unittest.TestCase):
         self.assertEqual(EVENTS, [("work", 10, 1), ("work", 20, 2), ("work", 30, 3)])
         EVENTS.clear()
         prompt = workflow([10, 20])
-        prompt["inner"] = node("LiuxinyuPacketStart", value0=["start", 1], value1=["values", 0])
+        prompt["repeat"] = node("LiuxinyuRepeatAnyToExecutionList", value=["start", 1], count=1)
+        prompt["inner"] = node("LiuxinyuPacketStart", value0=["repeat", 0], value1=["list", 0])
         prompt["work"]["inputs"].update(value=["inner", 101], other=["start", 101])
         prompt["inner_end"] = node("LiuxinyuPacketEnd", condition=["inner", 0], value0=["work", 0])
         prompt["end"]["inputs"]["value0"] = ["inner_end", 0]
@@ -348,11 +355,35 @@ class PacketTests(unittest.TestCase):
 
     def test_last_socket_keeps_its_index(self):
         prompt = workflow([7])
-        prompt["start"]["inputs"]["value99"] = 99
+        prompt["repeat"] = node("LiuxinyuRepeatAnyToExecutionList", value=99, count=1)
+        prompt["start"]["inputs"]["value99"] = ["repeat", 0]
         prompt["end"]["inputs"]["value99"] = ["start", 100]
         prompt["out"]["inputs"]["value99"] = ["end", 99]
         result = self.run_graph(prompt)
         self.assertEqual(result.history_result["outputs"]["out"]["value99"], [99])
+
+    def test_plain_values_rejected_with_conversion_guidance(self):
+        for value in ([], [1], [1, 2], [[1, 2]], (1, 2), "text", 42, {"a": 1}):
+            with self.subTest(value=value):
+                prompt = workflow()
+                prompt["values"]["inputs"]["payload"]["value"] = value
+                prompt["start"]["inputs"]["value0"] = ["values", 0]
+                result = self.run_graph(prompt, success=False)
+                errors = [msg[1]['exception_message'] for msg in result.status_messages if msg[0] == 'execution_error']
+                self.assertIn('将任意数组转为执行列表', errors[0])
+                self.assertEqual(EVENTS, [])
+
+    def test_mapped_execution_lists_and_collected_array(self):
+        for values in ([7], [7, 8]):
+            prompt = workflow(values)
+            prompt['mapped'] = node('PacketTestProcess', value=['list', 0], label='mapped')
+            prompt['start']['inputs']['value0'] = ['mapped', 0]
+            result = self.run_graph(prompt)
+            self.assertEqual(result.history_result['outputs']['out']['value0'], values)
+        prompt = workflow()
+        prompt['collected'] = node('PacketTestGroup', value=['list', 0])
+        prompt['start']['inputs']['value0'] = ['collected', 0]
+        self.run_graph(prompt, success=False)
 
 
 if __name__ == "__main__":

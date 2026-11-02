@@ -1,30 +1,27 @@
 """Paired packet loops using ComfyUI's native loop boundaries and scheduler."""
 
-import nodes
 from comfy_api.latest import io
 from comfy_execution.graph_utils import GraphBuilder, is_link
+from liuxinyu_execution_lists import require_execution_list
 
 
 MAX_SOCKETS = 100
 CONDITION = io.Custom("LIUXINYU_PACKET_CONDITION")
 
 
-def packet_columns(inputs, execution_lists=()):
+def packet_columns(inputs):
     columns = {}
     for name, values in inputs.items():
         if name.startswith("value") and name[5:].isdigit():
             index = int(name[5:])
             if index >= MAX_SOCKETS:
                 raise ValueError(f"最多支持 {MAX_SOCKETS} 对输入输出。")
-            # An atomic ARRAY arrives wrapped in one extra executor list.
-            if name not in execution_lists and len(values) == 1 and isinstance(values[0], (list, tuple)):
-                values = values[0]
             columns[index] = values
     if not columns:
         raise ValueError("请至少连接一个待分包的输入。")
     count = max(map(len, columns.values()))
     if count and any(not column for column in columns.values()):
-        raise ValueError("有输入是空数组，无法复用其最后一个值；请补充该输入或断开连接。")
+        raise ValueError("有输入是空执行列表，无法复用其最后一个值；请补充该输入或断开连接。")
     return columns, count
 
 
@@ -45,7 +42,7 @@ class LiuxinyuPacketStart(io.ComfyNode):
     def define_schema(cls):
         return io.Schema(
             node_id="LiuxinyuPacketStart", display_name="分包执行子流回归", category="liuxinyu/流程控制",
-            description="按最长数组逐包执行子流，等待本包回归后再发下一包。短数组重复最后一项，单值重复使用。当前轮次输出从 1 开始的整数，嵌套时各自计数。将分包回归条件连接到回归分包子流条件节点。",
+            description="只接受执行列表，逐项分包；普通数组须先接「将任意数组转为执行列表」。按最长列表逐包执行，短的非空列表重复最后一项。等待本包回归后再发下一包。当前轮次从 1 开始，嵌套时各自计数。将分包回归条件连接到回归分包子流条件节点。",
             is_input_list=True, accept_all_inputs=True, enable_expand=True, loop_boundary="start",
             inputs=value_inputs(),
             outputs=[CONDITION.Output(display_name="分包回归条件")] + value_outputs() + [io.Int.Output(display_name="当前轮次")],
@@ -61,14 +58,10 @@ class LiuxinyuPacketStart(io.ComfyNode):
         dynprompt = cls.hidden.dynprompt
         unique_id = cls.hidden.unique_id
         opener = dynprompt.get_node(unique_id)
-        execution_lists = set()
         for name, value in opener["inputs"].items():
-            if name.startswith("value") and is_link(value):
-                upstream = nodes.NODE_CLASS_MAPPINGS[dynprompt.get_node(value[0])["class_type"]]
-                flags = getattr(upstream, "OUTPUT_IS_LIST", ())
-                if value[1] < len(flags) and flags[value[1]]:
-                    execution_lists.add(name)
-        columns, count = packet_columns(kwargs, execution_lists)
+            if name.startswith("value") and name[5:].isdigit():
+                require_execution_list(dynprompt, value, f"输入 {int(name[5:]) + 1}")
+        columns, count = packet_columns(kwargs)
         if "_loop_end" not in opener:
             raise ValueError("请将分包回归条件连接到「回归分包子流条件」，并把本包处理结果接入该回归节点。")
         close_id = opener["_loop_end"]
