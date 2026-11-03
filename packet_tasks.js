@@ -30,7 +30,7 @@ function updatePacketTypes(node, isStart, inputOffset, outputOffset) {
       const target = node.graph?.getNodeById?.(link.target_id);
       const targetInput = target?.inputs?.[link.target_slot];
       const adaptive = ["LiuxinyuPacketStart", "LiuxinyuPacketEnd", "LiuxinyuReturnPoint",
-        "LiuxinyuIgnoreMemoryChecks", "LiuxinyuRestoreMemoryChecks"].includes(target?.comfyClass)
+        "LiuxinyuIgnoreMemoryChecks", "LiuxinyuRestoreMemoryChecks", "LiuxinyuVirtualOutput"].includes(target?.comfyClass)
         && /^value\d+$/.test(targetInput?.name || "");
       if (targetInput && !adaptive && !compatible(outputType, targetInput.type)) {
         target.disconnectInput(link.target_slot);

@@ -2,7 +2,7 @@
 
 面向日常工作流的图片、长图、文件路径、字符串、数学和分包子流工具。适合多目录详情页整理、长图切分与拼接、批次图片挑选保存、提示词组合，以及把多步处理限制在同一个对象范围内。
 
-当前包含 **70 个用户节点**，另有 **7 个由分包与条件循环功能自动创建的内部节点**。下方按用途完整列出名称、用途和节点 ID。中文名称可直接在 ComfyUI 添加节点的搜索框中查找，ID 用于识别 API 工作流和错误报告。
+当前包含 **72 个用户节点**，另有 **7 个由分包与条件循环功能自动创建的内部节点**。下方按用途完整列出名称、用途和节点 ID。中文名称可直接在 ComfyUI 添加节点的搜索框中查找，ID 用于识别 API 工作流和错误报告。
 
 ## 阅读导航
 
@@ -93,6 +93,7 @@ git pull --ff-only
 | [数学与函数采样](#数学与函数采样11个) | 11 | 多输入计算、整数运算与数列 |
 | [分包子流与条件循环](#分包子流与条件循环6个) | 6 | 逐个对象独立处理，或比较数据并按条件反复更新 |
 | [任务内存控制](#任务内存控制2个) | 2 | 暂停或恢复当前任务的逐步 RAM 检查与回收 |
+| [虚拟连接](#虚拟连接2个) | 2 | 同键一个传入端与多个传出端跨画布和子图配对，运行前还原普通连线，数量与类型双向同步 |
 | [系统命令](#系统命令1个) | 1 | 在 Windows 主机运行 cmd |
 
 ### 路径、加载与保存（8个）
@@ -167,7 +168,7 @@ git pull --ff-only
 | [批量任意为执行列表](docs/LiuxinyuRepeatAnyToExecutionList.md) | 将任意值整体重复 N 次，不拆图片批次、不深拷贝张量，N=0 输出空列表。 | `LiuxinyuRepeatAnyToExecutionList` |
 | [将任意数组转为执行列表](docs/LiuxinyuArrayToExecutionList.md) | 直接将数组第一层元素逐项输出，保留类型、顺序和对象引用，空数组输出零项。 | `LiuxinyuArrayToExecutionList` |
 | [插入字段到字典或者js对象](docs/LiuxinyuInsertJSObject.md) | 按点号和下标定位；字典插入键值对，数组追加一个任意值，返回完整结构且不修改输入。 | `LiuxinyuInsertJSObject` |
-| [解析并校验 JSON 记录数组](docs/LiuxinyuParseJSONRecords.md) | 解析并检查对象数组；类型错误定位到记录、字段及数组元素，说明期望类型与实际值。输出数据、是否通过和错误信息，由下游选择停止、备用数据或重试。 | `LiuxinyuParseJSONRecords` |
+| [解析并校验 JSON 记录数组](docs/LiuxinyuParseJSONRecords.md) | 将整段输入作为一份完整 JSON 解析并校验对象数组，不提取片段或剥离说明、围栏。类型错误定位到记录、字段及数组元素，输出数据、状态和错误；混合文本须先接独立提取节点。 | `LiuxinyuParseJSONRecords` |
 | [可遍历字典的索引列表](docs/LiuxinyuArrayObjectPaths.md) | 按层数及字段/数组开关列出停止处的路径；同时输出完整索引数组和执行列表。 | `LiuxinyuArrayObjectPaths` |
 | [组装键值对](docs/LiuxinyuBuildKeyValuePairs.md) | 用键和值创建新字典；多个键可共用一个完整值，保留值类型，不提取字段或修改原容器。 | `LiuxinyuBuildKeyValuePairs` |
 | [并和数组中的字典字段为字典](docs/LiuxinyuMergeDictionaryArray.md) | 把字典数组的第一层字段合成一个新字典；空数组输出空字典，重复键报错，值类型原样保留。 | `LiuxinyuMergeDictionaryArray` |
@@ -212,6 +213,15 @@ git pull --ff-only
 | [恢复内存检查和回收](docs/LiuxinyuRestoreMemoryChecks.md) | 等全部已连接输入完成后，恢复正常检查和回收，也可以作为流程终点。 | `LiuxinyuRestoreMemoryChecks` |
 
 这两个节点无配置项，端口按需增长、类型跟随输入，没有固定数量上限。需要本地核心配套的 `Schema.dynamic_io_prefix`、`ExecutionList.set_ram_checks_enabled` 和执行器检查开关；只复制节点包到未包含这些接口的 ComfyUI 不足以启用功能。修改核心或节点 Python 后需要重启，更新前端脚本后刷新页面。
+
+### 虚拟连接（2个）
+
+| 节点 | 用途与关键行为 | 节点 ID |
+| --- | --- | --- |
+| [传入虚拟连接](docs/LiuxinyuVirtualOutput.md) | 发送端，连接一条或多条上游数据；填写键后与多个接收端配对，动态输入按编号传递。 | `LiuxinyuVirtualOutput` |
+| [传出虚拟连接](docs/LiuxinyuVirtualInput.md) | 接收端，可在多处使用同键取得唯一发送端各路结果并提供对应输出；自动保留真实上游依赖及执行列表语义。 | `LiuxinyuVirtualInput` |
+
+位于 `liuxinyu/虚拟连接`。键为空时没有数据端口，填写后至少出现一路；一键只允许一个传入端（发送端），可有多个传出端（接收端）；仅传入端重名时提示并清空新填写的键。任一端新增连接时，所有同键端口同步数量和类型；某一路在传入端及全部传出端都断开后才同步删除，中间空路也会收起并保持实际连线配对，末尾保留备用口。运行前逐个检查下游要求。键控件不占数据通道；一条输入对应一条输出，另留一个备用空口。已使用的输出缺少对应输入时，运行前报错并指出键、通道和两端节点，未用备用口不报错。主图与嵌套子图共用当前工作流的键空间。运行前检查配对、类型与依赖环，再将虚拟连接编译为普通 API 连线；不使用运行变量、不增添执行顺序节点。键与连线布局随工作流 JSON 保存。新增 Python 节点后重启后端并刷新页面；供 API 执行时使用安装本扩展的前端导出的 API 工作流。
 
 ### 系统命令（1个）
 

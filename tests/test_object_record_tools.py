@@ -38,21 +38,19 @@ class RecordToolsTests(unittest.TestCase):
         self.assert_invalid('[]', '{bad contract}')
         self.assert_invalid(None)
 
-    def test_parser_uses_final_document_and_preserves_literal_characters(self):
+    def test_parser_reads_whole_array_and_preserves_literal_characters(self):
         expected = [{"name": '文字 " [ { \\ \n {t1}', "tags": ["x", "y"]}]
         data = json.dumps(expected, ensure_ascii=False)
-        for text in (data, "草稿：[]\n最终结果：" + data,
-                     '[{"draft":true}]\n' + data,
-                     "```json\n[]\n```\n最终结果：" + data,
-                     "```json\n[]\n```\n最终结果\n```json\n" + data + "\n```"):
+        for text in (data, " \r\n\t" + data + "\r\n "):
             self.assertEqual(value(Parse, text, '{"name":"string","tags":"string[]"}'), expected)
 
-    def test_parser_rejects_bad_final_document_instead_of_using_draft(self):
-        for text in ('[]\n[{"name":', '[]\n[{"name":}]',
-                     '```json\n[]\n```\n```json\n[{"name":',
-                     '```json\n[]\n```\n```json\n[{"name":}]\n```'):
+    def test_parser_does_not_extract_from_prose_fences_or_multiple_documents(self):
+        data = '[{"id":"A"}]'
+        for text in ('解释\n' + data, data + '\n解释', '```json\n' + data + '\n```',
+                     "'''json\n" + data + "\n'''", '[]\n' + data, data + '\n[]',
+                     '{}\n' + data, '[]\n[{"id":', '[]\n[{"id":}]'):
             with self.subTest(text=text):
-                self.assert_invalid(text, '{"name":"string"}')
+                self.assert_invalid(text)
 
     def test_parser_rejects_duplicate_keys_and_nonstandard_numbers(self):
         for text in ('[{"id":"a","id":"b"}]', '[{"id":NaN}]', '[{"id":Infinity}]', '[{"id":1e999}]'):

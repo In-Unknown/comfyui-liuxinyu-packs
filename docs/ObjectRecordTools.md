@@ -8,7 +8,7 @@
 
 | 你现在有什么，需要做什么 | 选择节点 | 得到什么 |
 | --- | --- | --- |
-| 一段文本，需要取出其中的 JSON 对象数组，并检查每条记录的字段类型 | [解析并校验 JSON 记录数组](LiuxinyuParseJSONRecords.md) | 记录数组、是否通过、错误信息 |
+| 一份完整 JSON 对象数组文本，需要检查每条记录的字段类型 | [解析并校验 JSON 记录数组](LiuxinyuParseJSONRecords.md)；含解释或围栏的文本先接独立提取节点 | 记录数组、是否通过、错误信息 |
 | 一个对象或数组，需要按层数和遍历开关列出位置 | [可遍历字典的索引列表](LiuxinyuArrayObjectPaths.md) | 索引数组和索引执行列表 |
 | 已经有键和值，需要创建一个新字典 | [组装键值对](LiuxinyuBuildKeyValuePairs.md) | `{键: 值}` 对象；多个键可共用一个完整值 |
 | 已有一个字典数组，需要把各字典字段合进一个新字典 | [并和数组中的字典字段为字典](LiuxinyuMergeDictionaryArray.md) | 一个完整字典；重复键报错 |

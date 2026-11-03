@@ -42,6 +42,7 @@ function chooseFileVersion(path, savedAt, modified, manual = false) {
       // into the new baseline without ever reaching the file.
       syncing = true;
       keep.disabled = sync.disabled = true;
+      actions.style.display = "none";
       message.textContent = "正在读取实际文件并完成节点初始化…";
       dialog.setAttribute("aria-busy", "true");
       resolve("sync");

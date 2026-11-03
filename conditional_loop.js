@@ -54,7 +54,7 @@ function outputType(node, index, type) {
     const pairedReturn = kind(node) === START && kind(target) === END &&
       origin(target, target.inputs[0]).source === node && cable.target_slot === index + 1;
     const packetData = ["LiuxinyuPacketStart", "LiuxinyuPacketEnd"].includes(kind(target)) && /^value\d+$/.test(input?.name || "");
-    if (input && !GROWING.includes(kind(target)) && !pairedReturn && !packetData && !compatible(type, input.type)) {
+    if (input && !GROWING.includes(kind(target)) && kind(target) !== "LiuxinyuVirtualOutput" && !pairedReturn && !packetData && !compatible(type, input.type)) {
       target.disconnectInput(cable.target_slot);
     } else {
       target?.onConnectionsChange?.(1, cable.target_slot, true, cable, input);

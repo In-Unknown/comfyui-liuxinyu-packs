@@ -184,42 +184,6 @@ def _strict_json(text):
                       parse_constant=_invalid_json_constant, parse_float=_finite_json_float)
 
 
-def _last_json_document(text):
-    """Read a complete final document, never splice JSON with a greedy regex."""
-    text = text.strip()
-    stack = []
-    quoted = escaped = False
-    candidate = None
-    start = 0
-    for position, char in enumerate(text):
-        if not stack:
-            if char in "[{":
-                start = position
-                stack.append(char)
-            continue
-        if quoted:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == '"':
-                quoted = False
-        elif char == '"':
-            quoted = True
-        elif char in "[{":
-            stack.append(char)
-        elif char in "]}":
-            if stack.pop() != ("[" if char == "]" else "{"):
-                raise ValueError("JSON 括号不匹配。")
-            if not stack:
-                candidate = text[start:position + 1]
-    if stack:
-        raise ValueError("最后一个 JSON 文档未闭合，请提供完整的对象或数组。")
-    if candidate is None:
-        raise ValueError("输入文本中没有完整的 JSON 对象或数组。")
-    return _strict_json(candidate)
-
-
 def _record_field_type(value, kind):
     if kind.endswith("[]"):
         return type(value) is list and all(_record_field_type(item, kind[:-2]) for item in value)
@@ -251,15 +215,16 @@ class LiuxinyuParseJSONRecords(io.ComfyNode):
             node_id="LiuxinyuParseJSONRecords", display_name="解析并校验 JSON 记录数组",
             category="liuxinyu/结构化数据",
             description=(
-                '从任意来源的文本中选取最后一个 JSON 对象或数组文档，要求结果为对象数组，并逐条检查必需字段与类型。'
-                '支持附带说明和代码围栏；不回退到前面的文档。通过时输出完整数组、true 和空错误信息；'
+                '将整个输入文本作为一份完整 JSON 解析，要求结果为对象数组，并逐条检查必需字段与类型。'
+                '只允许 JSON 前后空白，不提取片段、不去除说明或代码围栏，也不选取多份 JSON 中的一份。'
+                '混合文本请在上游显式连接正则提取节点。通过时输出完整数组、true 和空错误信息；'
                 '校验不通过时输出空数组、false 和错误信息，不主动停止执行。由下游决定停止、重试或使用其他数据。'
                 '记录内容错误指出首个失败项、字段路径和实际类型；类型数组还指出失败元素的位置。'
                 '不展开为执行列表，不补字段或自动转换字段类型。'
                 '拒绝重复 JSON 键和非有限数值。字段规则是简单类型映射，不是 JSON Schema；详细规则和示例见同名帮助文档。'
             ),
             inputs=[io.String.Input("text", display_name="输入文本", multiline=True,
-                                    tooltip='包含 JSON 对象数组的文本，例如 [{"id":"A"}]。可来自文件、接口、手动填写或其他文本节点。'),
+                                    tooltip='一份完整 JSON 对象数组文本，例如 [{"id":"A"}]；允许前后空白。说明、代码围栏或多份 JSON 需在上游另行提取，本节点不截取内容。'),
                     io.String.Input("fields", display_name="必需字段与类型", default='{"id":"string"}', multiline=True,
                                     tooltip='JSON 对象，例如 {"id":"nonempty_string","tags":"string[]"}。按直接键检查；支持 string、nonempty_string、integer、number、boolean、object、array、null 及一层 [] 类型。'),
                     io.Boolean.Input("allow_extra", display_name="允许其他字段", default=False,
@@ -281,7 +246,7 @@ class LiuxinyuParseJSONRecords(io.ComfyNode):
                 for kind in contract.values()
             ):
                 raise ValueError("字段契约需要是字段名到受支持类型的 JSON 对象。")
-            rows = _last_json_document(text)
+            rows = _strict_json(text)
             if not isinstance(rows, list):
                 raise ValueError(f"JSON 顶层需要是记录数组。位置 $；实际为 {_record_actual_value(rows)}。")
             for index, row in enumerate(rows):
