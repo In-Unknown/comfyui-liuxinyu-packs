@@ -91,6 +91,7 @@ git pull --ff-only
 | 非工作流文件交给 Windows 打开 | 在工作区单击文件的行或图标 | `.md`、`.txt` 等非 JSON 文件直接交给 Windows 默认程序；JSON 先检查结构，明确是普通数据或报告模板才交给 Windows，全程不新增标签页或切换当前画布。有工作流结构痕迹、语法损坏或判断不明确的 JSON 保留 ComfyUI 原生处理，缺节点、连线错误或运行失败不作为排除依据。书签按钮、目录展开、重命名和右键菜单不触发系统打开。首次添加或更新后端接口需重启后端再刷新页面，详见[判断规则与限制](docs/WorkspaceLabels.md#json-的保守检查规则)。 |
 | 节点 JSON ID 标记 | 节点框外底部左侧，自动显示 `ID: 522` | 对应工作流 JSON 的节点 `id`，方便对照报错和沟通节点位置。覆盖普通节点、子图节点和子图内部节点，折叠后仍绘制标记，复制后跟随新 ID；不改节点标题或数据。 |
 | 原始节点名称标记 | 普通节点标题上方，自动显示节点定义中的原始名称 | 即使将节点标题改成业务说明，也能辨认它实际是哪种节点。适用于具备相应绘制接口的节点，不仅限于本包；子图容器自身不加原始名称标记，子图内部普通节点仍显示。标记会避开已有徽标背景，不覆盖自定义标题。 |
+| 节点端口显示排序 | 选中节点 → 悬浮端口圆点或文字 → 按 ↑ / ↓ | 与同侧上下相邻端口交换位置；悬浮时显示快捷键提示，无需右键窗口。只影响当前悬浮的已选节点，顺序随工作流保存。端口标签、点击区域与连线落点一起移动，实际索引和连接关系不变。支持经典画布的普通节点与嵌套子图节点；带输入框的端口与控件整行一起移动，多行框按实际高度占位，不重复显示标签。Vue Nodes 模式暂停应用。详见[操作示例、动态端口与保存行为](docs/PortOrder.md)。 |
 | 节点搜索同步 | 页面初始化、后端重新连接、从浏览器往返缓存恢复页面时自动触发 | 重新获取并注册节点定义，同时更新画布节点注册与现代搜索列表，减少后端已更新而搜索仍旧的情况。后端新增 Python 节点仍须先重启后端；此功能不替代后端加载。 |
 | 队列进度浮层布局修正 | 顶部出现队列进度浮层时自动生效 | 将进度浮层放在操作栏下方，避免它撑高顶部布局而挤偏画布框选的裁剪区域。只修正界面布局，不改变任务队列的顺序或执行方式。 |
 
@@ -178,6 +179,7 @@ git pull --ff-only
 | [workspace_labels.js](workspace_labels.js) | 工作区文字、文件后缀及系统打开入口；后端配合 [workspace_files.py](workspace_files.py) |
 | [workflow_file_sync.js](workflow_file_sync.js) | 文件变动提示、手动同步、未保存差异 |
 | [node_json_id.js](node_json_id.js)、[original_node_name.js](original_node_name.js) | 节点 ID 与原始名称标记 |
+| [port_order.js](port_order.js) | 悬浮端口后用方向键交换显示顺序、快捷键提示及工作流持久化 |
 | [search_sync.js](search_sync.js)、[queue_selection_fix.js](queue_selection_fix.js) | 搜索同步与队列浮层布局修正 |
 | [folder_picker.js](folder_picker.js) | 路径选择、即时图片预览、批次选择与保存 |
 | [preview_long_image.js](preview_long_image.js)、[long_preview_tiles.js](long_preview_tiles.js) | 超长图浏览及可见图块加载 |
