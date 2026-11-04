@@ -6,6 +6,8 @@ const { test } = require('node:test');
 
 const source = fs.readFileSync(path.join(__dirname, '../workflow_file_sync.js'), 'utf8')
   .replace(/^import .*;\r?\n/gm, '');
+const menuSource = fs.readFileSync(path.join(__dirname, '../menu_source.js'), 'utf8')
+  .replace(/^import .*;\r?\n/gm, '').replace(/^export /gm, '');
 const graph = (value) => ({ nodes: [{ id: 1, widgets_values: [value] }], links: [] });
 const copy = (value) => JSON.parse(JSON.stringify(value));
 
@@ -118,7 +120,7 @@ function harness({ savedAt = 1000, modified = 2000, server = graph('server'), st
   };
   class TestDate extends Date { static now() { return now; } }
   const document = { createElement: element, body: { append() {} }, visibilityState: 'visible' };
-  vm.runInNewContext(source, {
+  vm.runInNewContext(menuSource + '\n' + source, {
     app, api, Date: TestDate,
     localStorage: { getItem: (k) => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, v) },
     document,
@@ -486,6 +488,7 @@ test('manual canvas command offers the same file again after cancelling', async 
   const h = harness(); await h.restore();
   h.dialogs[0].close('keep'); await h.flush();
   const menu = h.extension.getCanvasMenuItems();
+  assert(menu.every(item => item.className === 'liuxinyu-menu-source'));
   menu[0].callback(); await h.flush();
   assert.equal(h.dialogs.length, 2);
   h.dialogs[1].close('sync'); await h.flush();

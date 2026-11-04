@@ -12,6 +12,7 @@ const context = vm.createContext({app,LiteGraph,console,structuredClone,queueMic
   api:{fetchApi:async (...args)=>handler(...args)}});
 const source = name => fs.readFileSync(path.join(__dirname,'..',name),'utf8').replace(/^import .*;\r?$/gm,'').replace(/^export /gm,'');
 vm.runInContext(source('port_order.js'),context);
+vm.runInContext(source('menu_source.js'),context);
 vm.runInContext(source('graph_layout.js').replace('const PROPERTY = "liuxinyu_port_order";','')+
   '\nglobalThis.layoutTest = {snapshot,apply,restore,checkpoint,arrangeSelected,layoutFingerprint,request};',context);
 const helpers = context.layoutTest;
@@ -53,6 +54,18 @@ const plan={status:'ok',nodes:[{id:'1',pos:[0,100],inputs:[1,0],outputs:[0]},
   {id:'2',pos:[500,100],inputs:[1,0],outputs:[0]}]};
 
 (async()=>{
+  const styles=[];
+  context.document={getElementById:id=>styles.find(s=>s.id===id),createElement:tag=>({tag}),head:{append:s=>styles.push(s)}};
+  const sourceExtension=extensions.find(e=>e.name==='liuxinyu.MenuSource');
+  sourceExtension.setup();sourceExtension.setup();
+  assert.equal(styles.length,1,'shared menu styles are installed once');
+  const original={content:'entry',className:'existing',disabled:true,callback(){return 42;}};
+  const marked=context.sourceMenuItems([original,null]);
+  assert.equal(original.className,'existing','do not mutate existing menu items');
+  assert.equal(marked[0].className,'existing liuxinyu-menu-source');
+  assert.equal(marked[0].callback,original.callback);assert.equal(marked[0].callback(),42);
+  assert.equal(marked[0].disabled,true);assert.equal(marked[1],null);
+  delete context.document;
   const before=clone(graph.serialize());
   const saved=helpers.checkpoint([a,b]);
   helpers.apply([a,b],plan.nodes);
@@ -129,6 +142,8 @@ const plan={status:'ok',nodes:[{id:'1',pos:[0,100],inputs:[1,0],outputs:[0]},
   const ext=extensions.find(e=>e.name==='liuxinyu.GraphLayout');
   assert.equal(ext.getCanvasMenuItems()[0].content,'整理节点');
   assert.equal(ext.getNodeMenuItems()[0].content,'整理节点');
+  assert.equal(ext.getCanvasMenuItems()[0].className,'liuxinyu-menu-source');
+  assert.equal(ext.getNodeMenuItems()[0].className,'liuxinyu-menu-source');
   graph.inputNode={id:-10,pos:[-200,-50],size:[100,100],slots:[{pos:[-114,-20]}]};
   const boundary=helpers.snapshot(graph,[a,b]).nodes.at(-1);
   assert.deepEqual(clone(boundary.outputs),[{x:86,y:30}]);assert.equal(boundary.selected,false);

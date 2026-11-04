@@ -1,5 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { sourceMenuItems } from "./menu_source.js";
 
 function readJSON(key) {
   try {
@@ -364,9 +365,9 @@ app.registerExtension({
   beforeLoadGraph() { beforeLoad(); },
   afterLoadGraph() { afterLoad(); },
   getCanvasMenuItems() {
-    return [
+    return sourceMenuItems([
       ...(manualCheck ? [{ content: "检查/同步后端工作流文件", callback: () => manualCheck() }] : []),
       { content: "查看未保存差异", callback: showUnsavedDifferences },
-    ];
+    ]);
   },
 });

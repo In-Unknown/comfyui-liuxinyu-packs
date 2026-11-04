@@ -1,6 +1,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { entries } from "./port_order.js";
+import { sourceMenuItems } from "./menu_source.js";
 
 const PROPERTY = "liuxinyu_port_order";
 let busy = false;
@@ -251,8 +252,8 @@ async function arrangeSelected() {
 }
 
 function menu() {
-  return selection().length >= 2 ? [{ content: busy ? "整理节点（计算中）" : "整理节点", disabled: busy,
-    callback: () => { void arrangeSelected(); } }] : [];
+  return selection().length >= 2 ? sourceMenuItems([{ content: busy ? "整理节点（计算中）" : "整理节点", disabled: busy,
+    callback: () => { void arrangeSelected(); } }]) : [];
 }
 
 app.registerExtension({
