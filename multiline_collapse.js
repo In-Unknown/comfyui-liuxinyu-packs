@@ -6,10 +6,8 @@ function isLiuxinyuNode(node) {
 }
 
 function widgetForInput(node, input, index) {
-  const widget = node.getWidgetFromSlot?.(index);
-  if (widget) return widget;
   const name = typeof input?.widget === "string" ? input.widget : input?.widget?.name;
-  return name ? node.widgets?.find(candidate => candidate.name === name) : null;
+  return name ? node.widgets?.find(candidate => candidate.name === name) : node.getWidgetFromSlot?.(index);
 }
 
 function isMultiline(widget) {
@@ -25,7 +23,7 @@ function setup(node) {
     const layout = widget.computeLayoutSize?.bind(widget);
     const size = widget.computeSize?.bind(widget);
     if (!layout && !size) return null;
-    return { input, widget, layout, size, index, collapsed: false };
+    return { inputName: input.name, widget, layout, size, collapsed: false };
   });
   if (!entries.some(Boolean)) return;
   node._liuxinyuMultilineCollapseSetup = true;
@@ -34,7 +32,9 @@ function setup(node) {
     let changed = false;
     for (const entry of entries) {
       if (!entry) continue;
-      const collapsed = node.isInputConnected(entry.index);
+      // Autogrow and workflow loading can reorder or replace the input objects.
+      const input = node.inputs?.find(candidate => candidate.name === entry.inputName);
+      const collapsed = input?.link != null;
       if (entry.collapsed !== collapsed) changed = true;
       entry.collapsed = collapsed;
       entry.widget.hidden = collapsed;
@@ -43,9 +43,10 @@ function setup(node) {
         entry.widget.element.readOnly = collapsed;
       }
     }
-    if (!changed) return;
+    const minimum = node.computeSize();
+    if (!changed && node.size[1] >= minimum[1]) return;
     node.arrange?.();
-    node.setSize?.([node.size[0], node.computeSize()[1]]);
+    node.setSize?.([node.size[0], minimum[1]]);
     node.setDirtyCanvas?.(true, true);
   }
 
@@ -78,6 +79,7 @@ function setup(node) {
   node.onConfigure = function (...args) {
     const result = originalConfigure?.apply(this, args);
     sync();
+    queueMicrotask(sync);
     return result;
   };
   sync();
