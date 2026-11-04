@@ -150,6 +150,39 @@ class LayoutTests(unittest.TestCase):
                 "edges": [edge(i,i+1) for i in range(19)]}
         self.assert_plan(data,layout.solve(data,seconds=8))
 
+    def test_horizontal_centres_with_different_heights(self):
+        ns = [node(1,0,200),node(2,400,0),node(3,800,-100)]
+        ns[1]["size"][1] = 160
+        ns[2]["size"][1] = 120
+        es = [edge(1,2),edge(2,3)]
+        before = copy.deepcopy(ns)
+        aligned = layout.align_layout(ns,es)
+        centres = [n["pos"][1]+(n["size"][1]-30)/2 for n in aligned]
+        self.assertLess(max(centres)-min(centres),1e-8)
+        self.assertFalse(any(layout.evaluate(aligned,es,True).values()))
+        self.assertEqual(ns,before)
+
+    def test_vertical_centres_for_independent_sources(self):
+        ns = [node(1,0,0),node(2,90,250),node(3,600,0,2)]
+        ns[0]["size"][0] = 270
+        ns[0]["outputs"][0]["x"] = 261
+        ns[1]["size"][0] = 180
+        ns[1]["outputs"][0]["x"] = 171
+        es = [edge(1,3),edge(2,3,input=1)]
+        aligned = layout.align_layout(ns,es)
+        self.assertAlmostEqual(aligned[0]["pos"][0]+135,aligned[1]["pos"][0]+90)
+        self.assertFalse(any(layout.evaluate(aligned,es,True).values()))
+
+    def test_loop_suffix_alignment_retains_zero_crossings(self):
+        data = json.loads((Path(__file__).with_name("fixtures") / "layout_loop.json").read_text())
+        result = layout.solve(data,seconds=8)
+        self.assert_plan(data,result)
+        by_id = {n["id"]:n for n in materialize(data,result)["nodes"]}
+        centres = [by_id[i]["pos"][1]+(by_id[i]["size"][1]-30)/2 for i in ("4","5","6","7","13","10")]
+        self.assertLess(max(centres)-min(centres),1e-8)
+        self.assertAlmostEqual(by_id["2"]["pos"][0]+by_id["2"]["size"][0]/2,
+                               by_id["5"]["pos"][0]+by_id["5"]["size"][0]/2)
+
 
 class LayoutEndpointTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

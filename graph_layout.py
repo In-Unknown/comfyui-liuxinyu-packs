@@ -330,6 +330,85 @@ def compact(nodes, edges, cancelled=lambda: False):
     return result
 
 
+def align_layout(nodes, edges, cancelled=lambda: False):
+    """Align visible box centres in columns and connected rows, keeping valid geometry."""
+    result = copy.deepcopy(nodes)
+    indices = {n["id"]: i for i,n in enumerate(result) if n.get("selected")}
+    graph = nx.DiGraph()
+    graph.add_nodes_from(indices)
+    graph.add_edges_from((e["source"], e["target"]) for e in edges
+                         if e["source"] in indices and e["target"] in indices)
+    dag = nx.is_directed_acyclic_graph(graph)
+    reduced = nx.transitive_reduction(graph) if dag else graph
+    main = nx.dag_longest_path(reduced) if dag else []
+    primary = set(main)
+    deadline = time.monotonic()+4
+
+    def centre(n, axis):
+        return n["pos"][axis]+(n["size"][axis]-(n.get("titleHeight",30) if axis == 1 else 0))/2
+
+    def align(group, axis, preferred):
+        nonlocal result
+        values = [preferred, float(np.median([centre(result[i],axis) for i in group]))]
+        values.extend(centre(result[i],axis) for i in sorted(group))
+        for value in dict.fromkeys(values):
+            if cancelled() or time.monotonic() >= deadline:
+                return False
+            candidate = copy.deepcopy(result)
+            for i in group:
+                n = candidate[i]
+                n["pos"][axis] += value-centre(n,axis)
+            if not any(evaluate(candidate,edges,precise=True).values()):
+                result = candidate
+                return True
+        return False
+
+    # Nearby independent branches form columns. Do not collapse consecutive
+    # stages into one column, or move a fixed external node to obtain alignment.
+    columns = {i:{i} for i in indices.values()}
+    pairs = []
+    selected = list(indices)
+    for p, a in enumerate(selected):
+        for b in selected[p+1:]:
+            if nx.has_path(graph,a,b) or nx.has_path(graph,b,a):
+                continue
+            i, j = indices[a], indices[b]
+            distance = abs(centre(result[i],0)-centre(result[j],0))
+            width = min(result[i]["size"][0],result[j]["size"][0])
+            if distance <= width*.75:
+                pairs.append((distance/max(width,1),i,j))
+    for _, i, j in sorted(pairs):
+        group = columns[i] | columns[j]
+        if columns[i] == columns[j]:
+            continue
+        names = [result[k]["id"] for k in group]
+        if any(nx.has_path(graph,a,b) or nx.has_path(graph,b,a)
+               for p,a in enumerate(names) for b in names[p+1:]):
+            continue
+        anchor = next((k for k in sorted(group) if result[k]["id"] in primary), min(group))
+        if align(group,0,centre(result[anchor],0)):
+            for k in group:
+                columns[k] = group
+
+    # Align suffixes first: e.g. a return node and its final preview should
+    # follow the main chain's centre instead of floating above it together.
+    rows = {i:{i} for i in indices.values()}
+    main_edges = list(zip(main,main[1:]))
+    remaining = [e for e in reduced.edges if e not in main_edges]
+    remaining.sort(key=lambda e: result[indices[e[1]]]["pos"][0], reverse=True)
+    bypass = [e for e in graph.edges if not reduced.has_edge(*e)]
+    bypass.sort(key=lambda e: abs(result[indices[e[1]]]["pos"][0]-result[indices[e[0]]]["pos"][0]))
+    for a,b in list(reversed(main_edges))+remaining+bypass:
+        i,j = indices[a],indices[b]
+        if rows[i] == rows[j]:
+            continue
+        group = rows[i] | rows[j]
+        if align(group,1,centre(result[i],1)):
+            for k in group:
+                rows[k] = group
+    return result
+
+
 def solve(data, seconds=45, progress=None, cancelled=lambda: False):
     nodes, edges = validate(data)
     selected = [n for n in nodes if n.get("selected")]
@@ -399,6 +478,10 @@ def solve(data, seconds=45, progress=None, cancelled=lambda: False):
                     progress({"stage": "compact", "trials": trials+1, "before": initial, "best": actual,
                               "elapsed": round(time.monotonic()-start, 1)})
                 candidate = compact(candidate, edges, cancelled)
+                if progress:
+                    progress({"stage": "align", "trials": trials+1, "before": initial, "best": actual,
+                              "elapsed": round(time.monotonic()-start, 1)})
+                candidate = align_layout(candidate, edges, cancelled)
                 return {"status": "ok", "nodes": [{"id": n["id"], "pos": n["pos"],
                         "inputs": n["inputsOrder"], "outputs": n["outputsOrder"]}
                         for n in candidate if n.get("selected")], "checks": actual, "before": initial,

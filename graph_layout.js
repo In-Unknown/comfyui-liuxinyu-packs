@@ -45,6 +45,7 @@ function describeConflicts(conflicts = []) {
 function searchProgress(value) {
   if (value.stage === "topology") return `整理节点：正在检查拓扑\n${value.nodes} 个节点，${value.edges} 条内部连接`;
   if (value.stage === "compact") return `已找到零交叉方案，正在压缩空白并复核…\n已尝试 ${value.trials} 个布局，用时 ${value.elapsed} 秒`;
+  if (value.stage === "align") return `正在对齐主链和支线中心，并检查交叉与遮挡…\n已尝试 ${value.trials} 个布局，用时 ${value.elapsed} 秒`;
   return `正在搜索布局 · ${value.elapsed} 秒 · 已尝试 ${value.trials} 个\n原布局：${counts(value.before)}\n当前最好：${counts(value.best)}`;
 }
 
