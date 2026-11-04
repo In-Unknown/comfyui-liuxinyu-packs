@@ -3,7 +3,7 @@ import { app } from "../../scripts/app.js";
 const PROPERTY = "liuxinyu_port_order";
 const installed = new WeakSet();
 
-function entries(node, side) {
+export function entries(node, side) {
   const counts = new Map();
   return (node[side] || []).map((slot, index) => {
     const identity = slot.id != null ? ["id", slot.id] : ["name", slot.name];

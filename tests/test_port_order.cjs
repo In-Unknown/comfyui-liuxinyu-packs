@@ -10,7 +10,7 @@ const context = vm.createContext({
   app: { registerExtension(value) { extension = value; } }, LiteGraph, queueMicrotask,
 });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../port_order.js'), 'utf8')
-  .replace(/^import .*;$/m, '') + '\nglobalThis.testing = { entries, ordered, applyOrder, hoveredPort };', context);
+  .replace(/^import .*;$/m, '').replace(/^export /gm, '') + '\nglobalThis.testing = { entries, ordered, applyOrder, hoveredPort };', context);
 const { entries, ordered, applyOrder } = context.testing;
 const PROPERTY = 'liuxinyu_port_order';
 
