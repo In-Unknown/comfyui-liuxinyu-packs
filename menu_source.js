@@ -25,9 +25,6 @@ app.registerExtension({
         opacity: 0.85;
         pointer-events: none;
       }
-      .litecontextmenu .liuxinyu-menu-source + .liuxinyu-menu-source::after {
-        content: "";
-      }
       .litecontextmenu .litemenu-entry:not(.liuxinyu-menu-source):not(.separator) + .liuxinyu-menu-source,
       .litecontextmenu .liuxinyu-menu-source + .litemenu-entry:not(.liuxinyu-menu-source):not(.separator) {
         border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
