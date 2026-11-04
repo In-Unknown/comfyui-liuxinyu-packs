@@ -104,16 +104,27 @@ function layoutFingerprint(graph, chosen) {
     typeof value === "number" ? Math.round(value*1000)/1000 : value);
 }
 
+function copyPortOrder(order) {
+  if (order == null) return undefined;
+  // Node properties (including nested arrays) may be Vue reactive proxies.
+  // Copy this feature's plain data fields rather than structuredClone a proxy.
+  const copy = { version: order.version };
+  for (const side of ["inputs", "outputs"]) {
+    if (Array.isArray(order[side])) copy[side] = Array.from(order[side]);
+  }
+  return copy;
+}
+
 function checkpoint(nodes) {
   return nodes.map(node => ({ node, pos: Array.from(node.pos), size: Array.from(node.size),
-    property: node.properties?.[PROPERTY] == null ? undefined : structuredClone(node.properties[PROPERTY]) }));
+    property: copyPortOrder(node.properties?.[PROPERTY]) }));
 }
 
 function restore(saved) {
   for (const { node, pos, size, property } of saved) {
     node.properties ||= {};
     if (property === undefined) delete node.properties[PROPERTY];
-    else node.properties[PROPERTY] = structuredClone(property);
+    else node.properties[PROPERTY] = copyPortOrder(property);
     node.pos = [...pos];
     node.setSize([...size]);
     node.arrange();

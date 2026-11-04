@@ -17,7 +17,7 @@ vm.runInContext(source('graph_layout.js').replace('const PROPERTY = "liuxinyu_po
 const helpers = context.layoutTest;
 const graph = {_nodes:[],links:new Map(),beforeChange(){events.push('before');},afterChange(){events.push('after');},change(){events.push('change');},
   extra:{ds:{scale:1,offset:[0,0]}},
-  serialize(){return {extra:structuredClone(this.extra),nodes:this._nodes.map(n=>({id:n.id,pos:[...n.pos],size:[...n.size],properties:structuredClone(n.properties),
+  serialize(){return {extra:structuredClone(this.extra),nodes:this._nodes.map(n=>({id:n.id,pos:[...n.pos],size:[...n.size],properties:clone(n.properties),
     inputs:n.inputs.map(s=>({name:s.name,link:s.link})),outputs:n.outputs.map(s=>({name:s.name,links:s.links}))})),links:[...this.links.values()]};}};
 class Node {
   constructor(id,x) {
@@ -41,6 +41,14 @@ const portExtension = extensions.find(e=>e.name==='liuxinyu.PortOrder');
 for(const n of graph._nodes)portExtension.nodeCreated(n);
 app.canvas={graph,selected_nodes:{1:a,2:b},links_render_mode:2,setDirty(){}};
 const clone = x=>JSON.parse(JSON.stringify(x));
+const proxyCache=new WeakMap();
+function reactive(value) {
+  if (!value || typeof value!=='object') return value;
+  if (!proxyCache.has(value)) proxyCache.set(value,new Proxy(value,{
+    get(target,key,receiver){return reactive(Reflect.get(target,key,receiver));},
+  }));
+  return proxyCache.get(value);
+}
 const plan={status:'ok',nodes:[{id:'1',pos:[0,100],inputs:[1,0],outputs:[0]},
   {id:'2',pos:[500,100],inputs:[1,0],outputs:[0]}]};
 
@@ -70,6 +78,27 @@ const plan={status:'ok',nodes:[{id:'1',pos:[0,100],inputs:[1,0],outputs:[0]},
   assert.deepEqual(clone(a.pos),[0,100]);
   assert.deepEqual(clone(outside.pos),[-400,0]);
   assert.deepEqual(clone([...graph.links.values()]),before.links);
+  // ComfyUI exposes existing properties and nested order arrays through proxies.
+  // A first run with no order property did not exercise this browser case.
+  for (const n of [a,b]) n.properties=reactive(n.properties);
+  assert.throws(()=>structuredClone(a.properties.liuxinyu_port_order),{name:'DataCloneError'});
+  const sorted=clone(graph.serialize());
+  const orderedCheckpoint=helpers.checkpoint([a,b]);
+  a.properties.liuxinyu_port_order.inputs.reverse();
+  assert.notDeepEqual(clone(a.properties.liuxinyu_port_order),clone(orderedCheckpoint[0].property),'checkpoint must not alias nested arrays');
+  helpers.restore(orderedCheckpoint);
+  assert.deepEqual(clone(graph.serialize()),sorted);
+  events.length=0;
+  handler=async(url,opts)=>({ok:true,json:async()=>JSON.parse(opts.body).verify?{status:'ok'}:plan});
+  for(let i=0;i<2;i++) {
+    await helpers.arrangeSelected();
+    assert.deepEqual(clone(graph.serialize()),sorted,'repeated layout with reactive orders remains stable');
+    assert(messages.at(-1).includes('已整理'));
+  }
+  assert.equal(events.length,6);
+  handler=async(url,opts)=>({ok:true,json:async()=>JSON.parse(opts.body).verify?{status:'not_found'}:plan});
+  await helpers.arrangeSelected();
+  assert.deepEqual(clone(graph.serialize()),sorted,'failed trial restores reactive orders');
   helpers.restore(saved);events.length=0;
   let phase=0;
   handler=async()=>{
