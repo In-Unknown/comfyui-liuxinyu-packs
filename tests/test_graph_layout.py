@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import types
 import unittest
+from unittest.mock import patch
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
@@ -61,7 +62,17 @@ class LayoutTests(unittest.TestCase):
         for graph in (layout.nx.complete_graph(5), layout.nx.complete_bipartite_graph(3,3)):
             data = {"nodes": [node(n, n*300, 0) for n in graph],
                     "edges": [edge(a,b) for a,b in graph.edges]}
-            self.assertEqual(layout.solve(data)["status"], "nonplanar")
+            progress = []
+            result = layout.solve(data, seconds=1, progress=progress.append)
+            self.assertFalse(result["planar"])
+            self.assertGreater(result["trials"], 0)
+            self.assertIn("nonplanar", [p["stage"] for p in progress])
+            self.assertEqual(result["status"], "ok", result)
+            rebuilt = materialize(data, result)
+            actual = layout.evaluate(rebuilt["nodes"], rebuilt["edges"], True)
+            self.assertTrue(layout.better(actual, layout.layout_cost(rebuilt["nodes"], rebuilt["edges"]),
+                                         result["before"], layout.layout_cost(data["nodes"], data["edges"])))
+            self.assertTrue(result["partial"])
 
     def test_diamond(self):
         data = {"nodes": [node(1,0,0), node(2,400,-200), node(3,400,200), node(4,800,0,2)],
@@ -89,9 +100,11 @@ class LayoutTests(unittest.TestCase):
         self.assertEqual(result["status"],"ok",result)
         self.assertNotIn("3",[n["id"] for n in result["nodes"]])
 
-    def test_not_found_is_not_impossibility(self):
-        data = {"nodes":[node(1,0,0),node(2,0,0)],"edges":[edge(1,2)]}
-        self.assertEqual(layout.solve(data,seconds=0)["status"],"not_found")
+    def test_no_improvement_keeps_current_layout(self):
+        data = {"nodes":[node(1,0,0),node(2,400,0)],"edges":[]}
+        result = layout.solve(data,seconds=0)
+        self.assertEqual(result["status"],"not_improved")
+        self.assertNotIn("nodes",result)
 
     def test_parallel_overlap(self):
         p = layout.np.array([(0,0),(100,0)])
@@ -140,10 +153,40 @@ class LayoutTests(unittest.TestCase):
         result = layout.solve(data, progress=progress.append, cancelled=lambda: True)
         self.assertEqual(result["status"], "cancelled")
         self.assertEqual(progress[0]["stage"], "topology")
-        failure = layout.solve(data,seconds=0)
+        with patch.object(layout, "compact", side_effect=lambda ns,*a: ns), \
+             patch.object(layout, "align_layout", side_effect=lambda ns,*a: ns):
+            failure = layout.solve(data,seconds=0)
+        self.assertEqual(failure["status"],"not_improved")
         self.assertTrue(failure["conflicts"])
         self.assertIn("before",failure)
         self.assertIn("elapsed",failure)
+
+    def test_imperfect_candidate_is_aligned_without_more_conflicts(self):
+        ns = [node(1,0,0),node(2,600,0),node(3,0,300),node(4,600,300),
+              node(5,1200,100),node(6,1700,250)]
+        es = [edge(1,4),edge(3,2),edge(5,6)]
+        before = layout.evaluate(ns,es,True)
+        self.assertGreater(before["crossings"],0)
+        result = layout.align_layout(ns,es)
+        self.assertTrue(layout.no_more_conflicts(layout.evaluate(result,es,True),before))
+        self.assertAlmostEqual(result[4]["pos"][1],result[5]["pos"][1])
+
+    def test_priority_and_equal_conflict_compaction(self):
+        zero = {"crossings":0,"nodeIntersections":0,"overlaps":0}
+        crossed = dict(zero,crossings=1)
+        self.assertTrue(layout.better(crossed,200,crossed,300))
+        self.assertFalse(layout.better(crossed,300,crossed,300))
+        self.assertFalse(layout.better(dict(zero,overlaps=1),1,crossed,300))
+        self.assertFalse(layout.no_more_conflicts(dict(crossed,nodeIntersections=1),crossed))
+
+    def test_cancelled_during_refinement_has_no_plan(self):
+        data = {"nodes":[node(1,0,0),node(2,400,0)],"edges":[edge(1,2)]}
+        stopped = [False]
+        def cancel_in_align(value):
+            if value["stage"] == "align": stopped[0] = True
+        result = layout.solve(data,seconds=1,progress=cancel_in_align,cancelled=lambda:stopped[0])
+        self.assertEqual(result["status"],"cancelled")
+        self.assertNotIn("nodes",result)
 
     def test_twenty_node_chain(self):
         data = {"nodes": [node(i,0,0) for i in range(20)],
@@ -218,6 +261,24 @@ class LayoutEndpointTests(unittest.IsolatedAsyncioTestCase):
                 break
             await asyncio.sleep(.05)
         self.assertFalse(layout._busy)
+
+    async def test_verify_requires_actual_improvement_not_zero_conflicts(self):
+        data = {"nodes":[node(1,0,0),node(2,600,0),node(3,0,300),node(4,600,300)],
+                "edges":[edge(1,4),edge(3,2)]}
+        baseline = copy.deepcopy(data)
+        baseline["nodes"][1]["pos"] = [0,0]
+        data.update(verify=True,baseline=baseline)
+        response = await self.client.post("/layout",json=data)
+        result = await response.json()
+        self.assertEqual(result["status"],"ok",result)
+        self.assertTrue(result["partial"])
+        self.assertGreater(result["checks"]["crossings"],0)
+        data["baseline"] = {k:copy.deepcopy(data[k]) for k in ("nodes","edges")}
+        response = await self.client.post("/layout",json=data)
+        self.assertEqual((await response.json())["status"],"not_improved")
+        data["nodes"][1]["pos"] = [0,0]
+        response = await self.client.post("/layout",json=data)
+        self.assertEqual((await response.json())["status"],"not_improved")
 
 
 if __name__ == "__main__":

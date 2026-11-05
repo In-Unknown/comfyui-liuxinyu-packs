@@ -260,12 +260,41 @@ def layered_seed(original, directed, ranks, width, height, centre, rng, edges=()
     return candidate
 
 
+def conflict_quality(checks):
+    # Keep nodes readable before trading off the remaining wire crossings.
+    return checks["overlaps"], checks["nodeIntersections"], checks["crossings"]
+
+
+def layout_cost(nodes, edges):
+    by_id = {n["id"]: n for n in nodes}
+    total = 0
+    for e in edges:
+        a, b = by_id[e["source"]], by_id[e["target"]]
+        if not (a.get("selected") or b.get("selected")):
+            continue
+        pa, pb = a["outputs"][e["output"]], b["inputs"][e["input"]]
+        dx = b["pos"][0]+pb["x"]-a["pos"][0]-pa["x"]
+        dy = b["pos"][1]+pb["y"]-a["pos"][1]-pa["y"]
+        total += math.hypot(dx, dy)+3*max(0, -dx)
+    return total
+
+
+def better(checks, cost, before, before_cost):
+    quality, old_quality = conflict_quality(checks), conflict_quality(before)
+    return quality < old_quality or (quality == old_quality and cost < before_cost-1)
+
+
+def no_more_conflicts(checks, previous):
+    return all(checks[k] <= previous[k] for k in previous)
+
+
 def compact(nodes, edges, cancelled=lambda: False):
     """Shrink verified layouts, retaining port identity and fixed boundary geometry."""
     result = copy.deepcopy(nodes)
+    checks = evaluate(result, edges, precise=True)
     chosen = [n for n in result if n.get("selected")]
     # Horizontal compression keeps the entrance anchored; vertical compression
-    # preserves the centre. Never accept a step that introduces a collision.
+    # preserves the centre. Never increase any existing conflict count.
     for axis in (0, 1):
         anchor = min(n["pos"][0] for n in chosen) if axis == 0 else float(np.mean([n["pos"][1] for n in chosen]))
         for _ in range(14):
@@ -275,25 +304,12 @@ def compact(nodes, edges, cancelled=lambda: False):
             for n in candidate:
                 if n.get("selected"):
                     n["pos"][axis] = anchor+(n["pos"][axis]-anchor)*.90
-            if any(evaluate(candidate, edges, precise=True).values()):
+            measured = evaluate(candidate, edges, precise=True)
+            if not no_more_conflicts(measured, checks):
                 break
-            result = candidate
+            result, checks = candidate, measured
     # Pull loose sources toward their consumers and straighten short chains.
-    # Every accepted move remains collision-free; there is no force-layout drift.
-    def length(candidate):
-        by_id = {n["id"]: n for n in candidate}
-        total = 0
-        for e in edges:
-            a, b = by_id[e["source"]], by_id[e["target"]]
-            if not (a.get("selected") or b.get("selected")):
-                continue
-            pa, pb = a["outputs"][e["output"]], b["inputs"][e["input"]]
-            dx = b["pos"][0]+pb["x"]-a["pos"][0]-pa["x"]
-            dy = b["pos"][1]+pb["y"]-a["pos"][1]-pa["y"]
-            total += math.hypot(dx, dy)+3*max(0, -dx)
-        return total
-
-    cost = length(result)
+    cost = layout_cost(result, edges)
     deadline = time.monotonic()+4
     for _ in range(2):
         for index in [i for i,n in enumerate(result) if n.get("selected")]:
@@ -324,15 +340,18 @@ def compact(nodes, edges, cancelled=lambda: False):
                         return result
                     candidate = copy.deepcopy(result)
                     candidate[index]["pos"][axis] = value
-                    new_cost = length(candidate)
-                    if new_cost < cost-1 and not any(evaluate(candidate, edges, precise=True).values()):
-                        result, cost = candidate, new_cost
+                    new_cost = layout_cost(candidate, edges)
+                    if new_cost < cost-1:
+                        measured = evaluate(candidate, edges, precise=True)
+                        if no_more_conflicts(measured, checks):
+                            result, cost, checks = candidate, new_cost, measured
     return result
 
 
 def align_layout(nodes, edges, cancelled=lambda: False):
     """Align visible box centres in columns and connected rows, keeping valid geometry."""
     result = copy.deepcopy(nodes)
+    checks = evaluate(result, edges, precise=True)
     indices = {n["id"]: i for i,n in enumerate(result) if n.get("selected")}
     graph = nx.DiGraph()
     graph.add_nodes_from(indices)
@@ -348,7 +367,7 @@ def align_layout(nodes, edges, cancelled=lambda: False):
         return n["pos"][axis]+(n["size"][axis]-(n.get("titleHeight",30) if axis == 1 else 0))/2
 
     def align(group, axis, preferred):
-        nonlocal result
+        nonlocal result, checks
         values = [preferred, float(np.median([centre(result[i],axis) for i in group]))]
         values.extend(centre(result[i],axis) for i in sorted(group))
         for value in dict.fromkeys(values):
@@ -358,8 +377,9 @@ def align_layout(nodes, edges, cancelled=lambda: False):
             for i in group:
                 n = candidate[i]
                 n["pos"][axis] += value-centre(n,axis)
-            if not any(evaluate(candidate,edges,precise=True).values()):
-                result = candidate
+            measured = evaluate(candidate,edges,precise=True)
+            if no_more_conflicts(measured, checks):
+                result, checks = candidate, measured
                 return True
         return False
 
@@ -418,19 +438,21 @@ def solve(data, seconds=45, progress=None, cancelled=lambda: False):
                          if e["source"] in graph and e["target"] in graph)
     if progress:
         progress({"stage": "topology", "nodes": len(selected), "edges": graph.number_of_edges(), "trials": 0})
-    if not nx.check_planarity(graph)[0]:
-        return {"status": "nonplanar", "message": "所选节点之间的连接拓扑不是平面图，仅调整位置和端口顺序不可能消除全部交叉。"}
+    planar = nx.check_planarity(graph)[0]
+    if not planar and progress:
+        progress({"stage": "nonplanar", "trials": 0,
+                  "message": "连接拓扑无法消除全部交叉，继续搜索可改善的布局。"})
     start = time.monotonic()
     original = copy.deepcopy(nodes)
     best = copy.deepcopy(nodes)
     rng = random.Random(data.get("seed", 0))
 
-    def score(candidate):
-        result = evaluate(candidate, edges)
-        return result["crossings"]*100 + result["nodeIntersections"]*130 + result["overlaps"]*200
+    def score(checks):
+        return checks["crossings"]*100 + checks["nodeIntersections"]*130 + checks["overlaps"]*200
 
     initial = evaluate(nodes, edges, precise=True)
-    best_score = initial["crossings"]*100 + initial["nodeIntersections"]*130 + initial["overlaps"]*200
+    before_cost = best_cost = layout_cost(nodes, edges)
+    best_score = score(initial)
     best_checks = initial
     last_progress = 0
     directed = nx.DiGraph()
@@ -470,26 +492,19 @@ def solve(data, seconds=45, progress=None, cancelled=lambda: False):
                 step = width*.25 if axis == 0 else height*.25
                 n["pos"][axis] += rng.choice([-4,-2,-1,1,2,4])*step
         reorder(candidate, edges)
-        value = score(candidate)
-        if value == 0:
+        coarse = evaluate(candidate, edges)
+        value = score(coarse)
+        candidate_cost = layout_cost(candidate, edges)
+        if better(coarse, candidate_cost, best_checks, best_cost) or value == 0:
             actual = evaluate(candidate, edges, precise=True)
+            if better(actual, candidate_cost, best_checks, best_cost):
+                best, best_checks, best_cost = copy.deepcopy(candidate), actual, candidate_cost
+                best_score = score(actual)
             if not any(actual.values()):
-                if progress:
-                    progress({"stage": "compact", "trials": trials+1, "before": initial, "best": actual,
-                              "elapsed": round(time.monotonic()-start, 1)})
-                candidate = compact(candidate, edges, cancelled)
-                if progress:
-                    progress({"stage": "align", "trials": trials+1, "before": initial, "best": actual,
-                              "elapsed": round(time.monotonic()-start, 1)})
-                candidate = align_layout(candidate, edges, cancelled)
-                return {"status": "ok", "nodes": [{"id": n["id"], "pos": n["pos"],
-                        "inputs": n["inputsOrder"], "outputs": n["outputsOrder"]}
-                        for n in candidate if n.get("selected")], "checks": actual, "before": initial,
-                        "trials": trials+1, "elapsed": round(time.monotonic()-start, 2)}
-            value = actual["crossings"]*100 + actual["nodeIntersections"]*130 + actual["overlaps"]*200
-        if value < best_score:
-            best, best_score = copy.deepcopy(candidate), value
-            best_checks = evaluate(candidate, edges)
+                best, best_checks = candidate, actual
+                trials += 1
+                break
+            value = score(actual)
         elapsed = time.monotonic()-start
         if progress and elapsed-last_progress >= .5:
             progress({"stage": "search", "trials": trials+1, "before": initial, "best": best_checks,
@@ -501,11 +516,39 @@ def solve(data, seconds=45, progress=None, cancelled=lambda: False):
         if trials % 90 == 0 and trials:
             current, current_score = copy.deepcopy(best), best_score
         trials += 1
+    if cancelled():
+        return {"status": "cancelled", "message": "已取消整理，画布保持原样。"}
+    # Refine even an imperfect candidate; existing crossings no longer block
+    # alignment of unrelated rows/columns. Retain the unrefined best as fallback.
+    if progress:
+        progress({"stage": "compact", "trials": trials, "before": initial, "best": best_checks,
+                  "elapsed": round(time.monotonic()-start, 1)})
+    candidate = compact(best, edges, cancelled)
+    compacted = candidate
+    if progress:
+        progress({"stage": "align", "trials": trials, "before": initial,
+                  "best": evaluate(candidate, edges, precise=True), "elapsed": round(time.monotonic()-start, 1)})
+    candidate = align_layout(candidate, edges, cancelled)
+    if cancelled():
+        return {"status": "cancelled", "message": "已取消整理，画布保持原样。"}
+    checks = evaluate(candidate, edges, precise=True)
+    if not better(checks, layout_cost(candidate, edges), initial, before_cost):
+        candidate = min((best, compacted), key=lambda ns: (
+            *conflict_quality(evaluate(ns, edges, precise=True)), layout_cost(ns, edges)))
     conflicts = []
-    checks = evaluate(best, edges, precise=True, report=conflicts)
-    return {"status": "not_found", "message": "拓扑允许平面绘制，但本次搜索尚未找到满足实际几何约束的零交叉布局，画布未改动。",
-            "trials": trials, "before": initial, "checks": checks, "conflicts": conflicts[:8],
-            "elapsed": round(time.monotonic()-start, 2)}
+    checks = evaluate(candidate, edges, precise=True, report=conflicts)
+    improved = better(checks, layout_cost(candidate, edges), initial, before_cost)
+    result = {"status": "ok" if improved else "not_improved", "partial": any(checks.values()), "planar": planar,
+              "trials": trials, "before": initial, "checks": checks, "conflicts": conflicts[:8],
+              "elapsed": round(time.monotonic()-start, 2)}
+    if improved:
+        result["nodes"] = [{"id": n["id"], "pos": n["pos"],
+                            **{side: n.get(side+"Order", sorted(range(len(n[side])), key=lambda i: n[side][i]["y"]))
+                               for side in ("inputs", "outputs")}}
+                           for n in candidate if n.get("selected")]
+    else:
+        result["message"] = "本次没有找到比现状更好的布局，画布保持原样。"
+    return result
 
 
 _busy = False
@@ -566,8 +609,15 @@ async def layout_request(request):
         if data.get("verify"):
             conflicts = []
             checks = await asyncio.to_thread(evaluate, data["nodes"], data["edges"], True, conflicts)
-            result = {"status": "ok" if not any(checks.values()) else "not_found", "checks": checks,
-                      "conflicts": conflicts[:8]}
+            accepted = not any(checks.values())
+            before = None
+            if "baseline" in data:
+                baseline_nodes, baseline_edges = validate(data["baseline"])
+                before = await asyncio.to_thread(evaluate, baseline_nodes, baseline_edges, True)
+                accepted = better(checks, layout_cost(data["nodes"], data["edges"]), before,
+                                  layout_cost(baseline_nodes, baseline_edges))
+            result = {"status": "ok" if accepted else "not_improved", "checks": checks,
+                      "before": before, "partial": any(checks.values()), "conflicts": conflicts[:8]}
         else:
             result = await asyncio.to_thread(solve, data)
         return web.json_response(result)

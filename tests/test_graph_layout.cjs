@@ -139,6 +139,36 @@ const plan={status:'ok',nodes:[{id:'1',pos:[0,100],inputs:[1,0],outputs:[0]},
   handler=async()=>{throw new Error('offline');};
   await helpers.arrangeSelected();
   assert.deepEqual(clone(graph.serialize()),before);
+  const baseline=clone(helpers.snapshot(graph,[a,b]));
+  const partialPlan={...plan,partial:true,before:{crossings:5,nodeIntersections:0,overlaps:0},
+    checks:{crossings:2,nodeIntersections:0,overlaps:0}};
+  const measuredChecks={crossings:3,nodeIntersections:0,overlaps:0};
+  handler=async(url,opts)=>{
+    const data=JSON.parse(opts.body);
+    if(data.verify) {
+      assert.deepEqual(data.baseline,baseline,'compare measured geometry with the original snapshot');
+      assert.deepEqual(clone(graph.serialize()),before,'restore trial before comparison');
+    }
+    return {ok:true,json:async()=>data.verify?{status:'ok',checks:measuredChecks,before:partialPlan.before}:partialPlan};
+  };
+  events.length=0;
+  await helpers.arrangeSelected();
+  assert.equal(events.length,3,'apply an imperfect but verified improvement in one undo transaction');
+  assert(messages.at(-1).includes('交叉 3'),'report actual measured conflicts, not predicted counts');
+  assert(messages.at(-1).includes('仍有剩余冲突'));
+  assert(!messages.at(-1).includes('全部为 0'));
+  helpers.restore(saved);events.length=0;
+  handler=async(url,opts)=>({ok:true,json:async()=>JSON.parse(opts.body).verify?
+    {status:'not_improved',checks:partialPlan.before}:partialPlan});
+  await helpers.arrangeSelected();
+  assert.deepEqual(clone(graph.serialize()),before);
+  assert.equal(events.length,0,'reject a predicted improvement that fails actual comparison');
+  assert(messages.at(-1).includes('没有优于原布局'));
+  requests=0;
+  handler=async()=>{requests++;return {ok:true,json:async()=>({status:'not_improved',message:'没有改善'})};};
+  await helpers.arrangeSelected();
+  assert.equal(requests,1);
+  assert.deepEqual(clone(graph.serialize()),before);
   const ext=extensions.find(e=>e.name==='liuxinyu.GraphLayout');
   assert.equal(ext.getCanvasMenuItems()[0].content,'整理节点');
   assert.equal(ext.getNodeMenuItems()[0].content,'整理节点');

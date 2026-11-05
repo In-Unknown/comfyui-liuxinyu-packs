@@ -45,7 +45,8 @@ function describeConflicts(conflicts = []) {
 
 function searchProgress(value) {
   if (value.stage === "topology") return `整理节点：正在检查拓扑\n${value.nodes} 个节点，${value.edges} 条内部连接`;
-  if (value.stage === "compact") return `已找到零交叉方案，正在压缩空白并复核…\n已尝试 ${value.trials} 个布局，用时 ${value.elapsed} 秒`;
+  if (value.stage === "nonplanar") return "连接拓扑无法消除全部交叉，继续搜索可改善的布局…";
+  if (value.stage === "compact") return `正在压缩当前最佳候选并复核…\n${counts(value.best)}\n已尝试 ${value.trials} 个布局，用时 ${value.elapsed} 秒`;
   if (value.stage === "align") return `正在对齐主链和支线中心，并检查交叉与遮挡…\n已尝试 ${value.trials} 个布局，用时 ${value.elapsed} 秒`;
   return `正在搜索布局 · ${value.elapsed} 秒 · 已尝试 ${value.trials} 个\n原布局：${counts(value.before)}\n当前最好：${counts(value.best)}`;
 }
@@ -222,7 +223,7 @@ async function arrangeSelected() {
     if (!unchanged()) { notify("计算期间工作流已变化，本次结果未应用，请重新整理。"); return; }
     if (plan.status !== "ok") {
       const detail = plan.checks ? `\n尝试 ${plan.trials} 个布局，用时 ${plan.elapsed} 秒；最好结果：${counts(plan.checks)}。\n${describeConflicts(plan.conflicts)}` : "";
-      notify((plan.message || "暂未找到零交叉方案，画布保持原样。")+detail);
+      notify((plan.message || "本次没有找到比现状更好的布局，画布保持原样。")+detail);
       return;
     }
     const saved = checkpoint(chosen);
@@ -233,10 +234,10 @@ async function arrangeSelected() {
       measured = snapshot(graph, chosen);
     } finally { restore(saved); }
     status.update("候选布局已找到，正在复核实际端口与控件位置…");
-    const result = await request({ ...measured, verify: true }, controller);
+    const result = await request({ ...measured, verify: true, baseline: data }, controller);
     if (controller.signal.aborted) { notify("已取消整理，画布保持原样。"); return; }
     if (!unchanged()) { notify("计算期间工作流已变化，本次结果未应用，请重新整理。"); return; }
-    if (result.status !== "ok") { notify(`实际端口位置复核未通过，画布保持原样。\n${counts(result.checks)}\n${describeConflicts(result.conflicts)}`); return; }
+    if (result.status !== "ok") { notify(`按实际端口位置复核后，没有优于原布局，画布保持原样。\n${counts(result.checks)}\n${describeConflicts(result.conflicts)}`); return; }
     graph.beforeChange();
     try {
       apply(chosen, plan.nodes);
@@ -245,7 +246,11 @@ async function arrangeSelected() {
       restore(saved);
       throw error;
     } finally { graph.afterChange(); canvas.setDirty(true, true); }
-    notify(`已整理 ${chosen.length} 个节点：${counts(plan.before)} → 全部为 0。\n已尝试 ${plan.trials} 个布局，用时 ${plan.elapsed} 秒；可撤销、保存。`);
+    const checks = result.checks || plan.checks;
+    const remaining = checks && Object.values(checks).some(v => v > 0);
+    notify(`已整理 ${chosen.length} 个节点：${counts(result.before || plan.before)} → ${counts(checks)}。\n`+
+      (remaining ? `已采用本次找到的改善方案，仍有剩余冲突。${describeConflicts(result.conflicts || plan.conflicts)}\n` : "")+
+      `已尝试 ${plan.trials} 个布局，用时 ${plan.elapsed} 秒；可撤销、保存。`);
   } catch (error) {
     notify(controller.signal.aborted ? (controller.signal.reason === "user" ? "已取消整理，画布保持原样。" : "整理请求超时，画布保持原样。") : error.message);
   } finally { controller.abort(); status.close(); busy = false; }
