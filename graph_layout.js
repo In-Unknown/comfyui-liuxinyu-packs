@@ -148,10 +148,11 @@ function apply(nodes, plan) {
       const indices = item[side];
       if (indices.length !== list.length || new Set(indices).size !== list.length ||
           indices.some(i => !Number.isInteger(i) || i < 0 || i >= list.length)) throw new Error("整理结果端口不匹配。");
-      order[side] = indices.map(i => list[i].key);
+      if (list.length) order[side] = indices.map(i => list[i].key);
     }
     node.properties ||= {};
-    node.properties[PROPERTY] = order;
+    if (order.inputs || order.outputs) node.properties[PROPERTY] = order;
+    else delete node.properties[PROPERTY];
     node.pos = [...item.pos];
     node.arrange();
   }

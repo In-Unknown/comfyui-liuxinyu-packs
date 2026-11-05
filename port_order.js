@@ -28,6 +28,7 @@ function ordered(node, side, preference = node.properties?.[PROPERTY]?.[side]) {
 
 function active(node, side) {
   return !LiteGraph.vueNodesMode && !node.flags?.collapsed &&
+    node[side]?.length > 0 &&
     Array.isArray(node.properties?.[PROPERTY]?.[side]);
 }
 

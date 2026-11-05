@@ -74,6 +74,18 @@ const plan={status:'ok',nodes:[{id:'1',pos:[0,100],inputs:[1,0],outputs:[0]},
   assert(a.getInputPos(1)[1]<a.getInputPos(0)[1]);
   helpers.restore(saved);
   assert.deepEqual(clone(graph.serialize()),before);
+  const note=new Node(754,900);note.inputs=[];note.outputs=[];
+  note.properties={userNote:true,liuxinyu_port_order:{version:1,inputs:[],outputs:[]}};
+  portExtension.nodeCreated(note);
+  const noteState=helpers.checkpoint([note]);
+  const notePlan=[{id:'754',pos:[1000,100],inputs:[],outputs:[]}];
+  helpers.apply([note],notePlan);
+  assert.deepEqual(clone(note.properties),{userNote:true},'Notes get no empty port order; unrelated properties remain');
+  assert.deepEqual(clone(note.size),[200,80]);
+  helpers.restore(noteState);
+  assert.deepEqual(clone(note.properties.liuxinyu_port_order),{version:1,inputs:[],outputs:[]},'Trial restore preserves old properties');
+  helpers.apply([note],notePlan);
+  assert.equal(note.properties.liuxinyu_port_order,undefined,'Repeated layout does not recreate empty orders');
   const json=helpers.snapshot(graph,[a,b]);
   assert.equal(json.nodes.filter(n=>n.selected).length,2);
   assert.equal(json.nodes[2].selected,false);

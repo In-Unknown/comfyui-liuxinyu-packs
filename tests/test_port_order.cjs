@@ -63,7 +63,11 @@ class Node {
   }
   _arrangeWidgets(bottom) {
     let height=this.widgets_start_y ?? bottom + 2;
-    this.widgets.forEach(w => { w.y=height; w.computedHeight=(w.computeSize?.()[1] ?? 20)+4; height+=w.computedHeight; });
+    this.widgets.forEach(w => {
+      w.y=height;
+      w.computedHeight=w.computeLayoutSize ? Math.max(w.computeLayoutSize(this).minHeight,this.size[1]-height) : (w.computeSize?.()[1] ?? 20)+4;
+      height+=w.computedHeight;
+    });
     if (height > this.size[1]) { this.size[1] = height; this.arrange(); }
   }
   arrange() {
@@ -113,7 +117,7 @@ if (process.argv[2]) {
   Node.prototype.getInputOnPos = function(pos) { return context.native.getNodeInputOnPos(this,...pos)?.input; };
   Node.prototype.getOutputOnPos = function(pos) { return context.native.getNodeOutputOnPos(this,...pos)?.output; };
   context.Zc = {margin:15};
-  context.distributeSpace = (space, targets) => { assert.equal(targets.length,0); return []; };
+  vm.runInContext(between('function distributeSpace(', 'function truncateText('), context);
   context.createBounds = slots => {
     const bounds=slots.map(p=>p.boundingRect);
     const x=Math.min(...bounds.map(b=>b[0])),y=Math.min(...bounds.map(b=>b[1]));
@@ -333,3 +337,22 @@ applyOrder(rowsNode,{});assert.equal(rowsNode.widgets[0].width,220,'Reset preser
 rowsNode.properties=clean(savedRows.properties);rowsNode.onConfigure({});rowsNode.arrange();assert.equal(geometry(),stable,'Saved settings restore whole control rows');
 assert.deepEqual(rowsNode.widgets.map(w=>w.value),['docs/example.md','{a}\n{b}',42]);
 console.log('PASS: whole widget rows, multiline height, hit regions, values, restore and stable repeated layout');
+
+// Note's flexible editor fills the native body. Old layout records include empty
+// port arrays, which must not activate the custom input row padding.
+for(const outputCount of [0,1]) {
+  const note=new Node();note.inputs=[];note.outputs=outputCount?[new Slot('text')]:[];
+  note.size=[400,320];
+  note.widgets=[{name:'text',value:'Note content',computeLayoutSize:()=>({minHeight:60,maxHeight:Infinity})}];
+  note.properties[PROPERTY]={version:1,inputs:[],outputs:entries(note,'outputs').map(e=>e.key)};
+  extension.nodeCreated(note);
+  for(let i=0;i<100;i++) {
+    note.arrange();note.serializeFromStoreState();
+    assert.equal(note.size[1],320,'Empty input ordering must not grow a flexible Note on every layout');
+  }
+  note.size[1]=160;
+  for(let i=0;i<10;i++) note.arrange();
+  assert.equal(note.size[1],160,'Manually shrinking an affected Note remains stable');
+  assert.equal(note.widgets[0].value,'Note content');
+}
+console.log('PASS: flexible Notes with saved empty orders retain height across repeated layout and manual resize');
