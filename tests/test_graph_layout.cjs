@@ -35,6 +35,31 @@ class Node {
   serializeFromStoreState(){return {};}
 }
 const a=new Node(1,0), b=new Node(2,400), outside=new Node(3,-400);
+{
+  const compound=new Node(100,0);
+  const header={name:'header',computedHeight:24},editor={name:'text',computedHeight:140};
+  const storage={name:'storage',computedHeight:0},button={name:'add',computedHeight:24};
+  compound.inputs=[{name:'text',widget:{name:'text'},_widget:header}];
+  compound.getLayoutWidgets=()=>[storage,header,editor,button];
+  const g={_nodes:[compound],links:new Map()};
+  let record=helpers.snapshot(g,[compound]).nodes[0];
+  assert.equal(record.inputs[0].height,164,'Layout search measures the whole header/editor group');
+  assert.equal(record.freeHeight,24,'Header is not counted again as a free control; hidden storage takes zero height');
+  compound.getLayoutWidgets=()=>[storage,header,button];
+  record=helpers.snapshot(g,[compound]).nodes[0];
+  assert.equal(record.inputs[0].height,24,'Connected editor leaves its header as the complete row');
+  assert.equal(record.freeHeight,24);
+  button.liuxinyuInputName='text';
+  record=helpers.snapshot(g,[compound]).nodes[0];
+  assert.equal(record.inputs[0].height,48,'Attached button belongs to the input group even when its editor is hidden');
+  assert.equal(record.freeHeight,0,'Attached button is not counted twice');
+  compound.constructor.slot_start_y=28;
+  compound.getInputPos=()=>[10,14];compound.getPortOrderOutputAnchor=()=>compound.inputs[0];
+  record=helpers.snapshot(g,[compound]).nodes[0];
+  assert.equal(record.inputTop,4,'Snapshot reports the real top widget row above ordinary socket start');
+  assert.equal(record.outputs[0].inputAnchor,0,'Output row following an input has an explicit anchor');
+  delete compound.constructor.slot_start_y;
+}
 graph._nodes=[a,b,outside];
 graph.links.set(1,{id:1,origin_id:1,origin_slot:0,target_id:2,target_slot:1});
 a.outputs[0].links=[1];b.inputs[1].link=1;

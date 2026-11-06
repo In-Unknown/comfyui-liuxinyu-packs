@@ -7,10 +7,14 @@ async function main() {
   const notices = [];
   let extension;
   const app = { registerExtension(e) { extension = e; }, extensionManager: { toast: { add(e) { notices.push(e); } } } };
-  const context = { app, queueMicrotask };
+  const context = { app, queueMicrotask, LiteGraph:{NODE_SLOT_HEIGHT:20,NODE_WIDGET_HEIGHT:20,vueNodesMode:false} };
   vm.createContext(context);
+  vm.runInContext('(function(){'+fs.readFileSync(path.join(__dirname,'../port_order.js'),'utf8')
+    .replace(/^import .*;\r?$/gm,'').replace(/^export /gm,'')+
+    '\nglobalThis.portTest={entries,ordered,applyOrder};globalThis.preservePortOrder=preservePortOrder;})()',context);
+  const portExtension=extension;
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "virtual_connections.js"), "utf8")
-    .replace(/^import .*;$/m, "") + "\nglobalThis.testApi = { compileConnections, validateCanvas, sync, entries };", context);
+    .replace(/^import .*;\r?$/gm, "") + "\nglobalThis.testApi = { compileConnections, validateCanvas, sync, entries };", context);
   const { compileConnections, validateCanvas, sync } = context.testApi;
   const SEND = "LiuxinyuVirtualOutput", RECEIVE = "LiuxinyuVirtualInput";
   let nextNode = 1, nextLink = 1;
@@ -20,7 +24,12 @@ async function main() {
   function make(kind, graph = root, nativeKey = false) {
     const node = {
       id: nextNode++, comfyClass: kind, type: kind, mode: 0, graph,
-      inputs: [], outputs: [], widgets: [{ name: "key", value: "" }], size: [240, 70],
+      inputs: [], outputs: [], widgets: [{ name: "key", value: "" }], size: [240, 70],pos:[0,0],properties:{},flags:{},
+      getLayoutWidgets(){return [];},arrange(){},
+      getInputPos(i){return this.inputs[i].pos||[10,(i+.7)*20];},
+      getOutputPos(i){return this.outputs[i].pos||[230,(i+.7)*20];},
+      _measureSlot(s,i,input){const p=input?this.getInputPos(i):this.getOutputPos(i);s.boundingRect=[p[0]-10,p[1]-10,20,20];},
+      serializeFromStoreState(){return JSON.parse(JSON.stringify({inputs:this.inputs,outputs:this.outputs,properties:this.properties}));},
       addInput(name, type) { this.inputs.push({ name, type, link: null }); },
       addOutput(name, type) { this.outputs.push({ name, type, links: [] }); },
       disconnectInput(index) {
@@ -50,11 +59,12 @@ async function main() {
         }
       },
       computeSize() { return [240, 50 + Math.max(this.inputs.length, this.outputs.length) * 20]; },
-      setSize(size) { this.size = size; }, setDirtyCanvas() {},
+      setSize(size) { this.size = size;this.arrange(); }, setDirtyCanvas() {},
     };
     if (nativeKey) node.inputs.push({ name: "key", type: "STRING", link: null, widget: { name: "key" } });
     graph._nodes.push(node);
     extension.nodeCreated(node);
+    portExtension.nodeCreated(node);
     node.onAdded?.();
     return node;
   }
@@ -262,6 +272,22 @@ async function main() {
   const keptOutputA = connect(shrinkA, 2, shrinkTargetA, 2);
   const keptOutputB = connect(shrinkB, 2, shrinkTargetB, 2);
   connect(shrinkA, 1, shrinkTargetA, 1); await settle();
+  const visualSnapshots=new Map();
+  for(const [n,side,order] of [[shrinkSend,'inputs',[3,1,2,0,4]],[shrinkA,'outputs',[2,0,1,3]],[shrinkB,'outputs',[1,2,0,3]]]){
+    const keys=context.portTest.entries(n,side).map(e=>e.key);
+    n.properties.liuxinyu_port_order={version:1,[side]:order.map(i=>keys[i])};n.arrange();
+    visualSnapshots.set(n,{side,slots:context.portTest.ordered(n,side).map(e=>e.slot)});
+  }
+  const checkOrders=()=>{
+    for(const [n,{side,slots}] of visualSnapshots){
+      const expected=slots.filter(s=>n[side].includes(s));
+      const actual=context.portTest.ordered(n,side).map(e=>e.slot);
+      assert.deepEqual(actual,expected,'Renaming lanes preserves surviving slot objects in visual order');
+      const y=Array.from(actual,s=>(side==='inputs'?n.getInputPos(n.inputs.indexOf(s)):n.getOutputPos(n.outputs.indexOf(s)))[1]);
+      assert.deepEqual(y,[...y].sort((a,b)=>a-b),'Rendered anchors follow the preserved preference');
+      n.serializeFromStoreState();n.arrange();
+    }
+  };
   assert.equal(shrinkA.outputs.length, 4); assert.equal(shrinkB.outputs.length, 4);
   shrinkSend.disconnectInput(2); await settle();
   assert.equal(shrinkA.outputs.length, 4); // Both receivers still use the middle lane.
@@ -269,6 +295,7 @@ async function main() {
   shrinkTargetA.disconnectInput(1); await settle();
   assert.equal(shrinkA.outputs.length, 4); // Receiver B alone still retains it everywhere.
   shrinkTargetB.disconnectInput(1); await settle();
+  checkOrders();
   assert.equal(shrinkSend.inputs.length, 4); // hidden key + two live lanes + spare
   for (const receiver of [shrinkA, shrinkB]) {
     assert.equal(receiver.outputs.length, 3);
@@ -295,8 +322,10 @@ async function main() {
   shrinkTargetA.disconnectInput(2); shrinkTargetB.disconnectInput(2); await settle();
   assert.equal(shrinkA.outputs.length, 3); // Sender still connected, keep the lane.
   shrinkSend.disconnectInput(2); await settle();
+  checkOrders();
   assert.equal(shrinkA.outputs.length, 2); assert.equal(shrinkB.outputs.length, 2);
   shrinkSend.disconnectInput(1); await settle();
+  checkOrders();
   assert.equal(shrinkSend.inputs.length, 2); // hidden key + one spare
   assert.equal(shrinkA.outputs.length, 1); assert.equal(shrinkB.outputs.length, 1);
   assert.equal(shrinkA.outputs[0].type, "*"); validateCanvas(root);

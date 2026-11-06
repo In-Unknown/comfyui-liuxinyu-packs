@@ -1,6 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { entries } from "./port_order.js";
+import { entries, writePortOrder, refreshSubgraphOrder, subgraphOrderHosts, inputWidgetGroup, widgetLayoutHeight, inputLayoutTop } from "./port_order.js";
 import { sourceMenuItems } from "./menu_source.js";
 
 const PROPERTY = "liuxinyu_port_order";
@@ -61,24 +61,26 @@ function snapshot(graph, chosen) {
     const size = Array.from(node.renderingSize || node.size);
     const pos = Array.from(node.pos);
     const widgets = node.getLayoutWidgets?.() || [];
-    const widgetByName = new Map(widgets.map(w => [w.name, w]));
     const used = new Set();
     const record = { id: String(node.id), pos, size, selected: selected.has(node.id),
-      titleHeight: LiteGraph.NODE_TITLE_HEIGHT, startY: node.constructor.slot_start_y || 0 };
+      titleHeight: LiteGraph.NODE_TITLE_HEIGHT, startY: node.constructor.slot_start_y || 0,
+      inputTop: inputLayoutTop(node) };
     for (const side of ["inputs", "outputs"]) {
       record[side] = entries(node, side).map(({ slot, index, key }) => {
         const input = side === "inputs";
         const p = input ? node.getInputPos(index) : node.getOutputPos(index);
-        const widget = input && slot.widget && widgetByName.get(slot.widget.name);
-        if (widget) used.add(widget);
+        const group = input ? inputWidgetGroup(node, slot, widgets) : [];
+        for (const widget of group) used.add(widget);
         if (slot.dir && slot.dir !== (input ? LiteGraph.LEFT : LiteGraph.RIGHT)) {
           throw new Error("当前整理支持左右方向的端口；画布中存在其他方向的连线端口。");
         }
+        const anchor = input ? -1 : (node.inputs || []).indexOf(node.getPortOrderOutputAnchor?.(index));
         return { key, x: p[0]-pos[0], y: p[1]-pos[1],
-          height: widget ? Math.max(20, widget.computedHeight ?? LiteGraph.NODE_WIDGET_HEIGHT+4) : 20 };
+          ...(anchor >= 0 ? { inputAnchor: anchor } : {}),
+          height: Math.max(20, group.reduce((sum, widget) => sum + widgetLayoutHeight(widget), 0)) };
       });
     }
-    record.freeHeight = widgets.filter(w => !used.has(w)).reduce((h, w) => h + Math.max(20, w.computedHeight ?? LiteGraph.NODE_WIDGET_HEIGHT+4), 0);
+    record.freeHeight = widgets.filter(w => !used.has(w)).reduce((h, w) => h + widgetLayoutHeight(w), 0);
     return record;
   });
   // Subgraph boundary sockets use absolute coordinates and remain fixed.
@@ -114,16 +116,27 @@ function copyPortOrder(order) {
   const copy = { version: order.version };
   for (const side of ["inputs", "outputs"]) {
     if (Array.isArray(order[side])) copy[side] = Array.from(order[side]);
+    else if (order[side] === null) copy[side] = null;
   }
   return copy;
 }
 
 function checkpoint(nodes) {
-  return nodes.map(node => ({ node, pos: Array.from(node.pos), size: Array.from(node.size),
+  const subgraphs = new Map(nodes.filter(node => node.subgraph?.inputNode && node.subgraph?.outputNode)
+    .map(node => [node.subgraph, copyPortOrder(node.subgraph.extra?.[PROPERTY])]));
+  const affected = new Set([...nodes, ...[...subgraphs.keys()].flatMap(subgraphOrderHosts)]);
+  const saved = [...affected].map(node => ({ node, pos: Array.from(node.pos), size: Array.from(node.size),
     property: copyPortOrder(node.properties?.[PROPERTY]) }));
+  saved.subgraphs = subgraphs;
+  return saved;
 }
 
 function restore(saved) {
+  for (const [graph, property] of saved.subgraphs || []) {
+    graph.extra ||= {};
+    if (property === undefined) delete graph.extra[PROPERTY];
+    else graph.extra[PROPERTY] = copyPortOrder(property);
+  }
   for (const { node, pos, size, property } of saved) {
     node.properties ||= {};
     if (property === undefined) delete node.properties[PROPERTY];
@@ -132,6 +145,7 @@ function restore(saved) {
     node.setSize([...size]);
     node.arrange();
   }
+  for (const graph of saved.subgraphs?.keys() || []) refreshSubgraphOrder(graph);
 }
 
 function apply(nodes, plan) {
@@ -150,9 +164,7 @@ function apply(nodes, plan) {
           indices.some(i => !Number.isInteger(i) || i < 0 || i >= list.length)) throw new Error("整理结果端口不匹配。");
       if (list.length) order[side] = indices.map(i => list[i].key);
     }
-    node.properties ||= {};
-    if (order.inputs || order.outputs) node.properties[PROPERTY] = order;
-    else delete node.properties[PROPERTY];
+    writePortOrder(node, order);
     node.pos = [...item.pos];
     node.arrange();
   }

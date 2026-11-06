@@ -63,9 +63,10 @@ class Node {
   }
   _arrangeWidgets(bottom) {
     let height=this.widgets_start_y ?? bottom + 2;
-    this.widgets.forEach(w => {
+    this.getLayoutWidgets().forEach(w => {
       w.y=height;
-      w.computedHeight=w.computeLayoutSize ? Math.max(w.computeLayoutSize(this).minHeight,this.size[1]-height) : (w.computeSize?.()[1] ?? 20)+4;
+      const layout=w.computeLayoutSize?.(this);
+      w.computedHeight=layout ? Math.max(layout.minHeight,Math.min(layout.maxHeight ?? Infinity,this.size[1]-height)) : (w.computeSize?.()[1] ?? 20)+4;
       height+=w.computedHeight;
     });
     if (height > this.size[1]) { this.size[1] = height; this.arrange(); }
@@ -356,3 +357,407 @@ for(const outputCount of [0,1]) {
   assert.equal(note.widgets[0].value,'Note content');
 }
 console.log('PASS: flexible Notes with saved empty orders retain height across repeated layout and manual resize');
+
+class Bounds extends Array {
+  containsXy(x,y) {return x>=this[0]&&x<this[0]+this[2]&&y>=this[1]&&y<this[1]+this[3];}
+}
+class BoundarySlot {
+  constructor(id,name,input) {Object.assign(this,{id,name,input,pos:[0,0],boundingRect:new Bounds(0,0,0,20),linkIds:[id+'-link']});}
+  measure(){return [this.name.length*7+20,20];}
+  arrange([x,y,w,h]) {this.boundingRect.splice(0,4,this.input?x-w:x,y,w,h);this.pos=[x+(this.input?-h/2:h/2),y+h/2];}
+  onPointerMove(e){this.isPointerOver=this.boundingRect.containsXy(e.canvasX,e.canvasY);}
+}
+class Boundary {
+  static minWidth=100;static roundedRadius=14;
+  constructor(graph,side){this.subgraph=graph;this.side=side;this.boundingRect=new Bounds(side==='inputs'?0:600,0,128,108);this.emptySlot=new BoundarySlot('empty','',side==='inputs');}
+  get slots(){return this.subgraph[this.side];}
+  get allSlots(){return [...this.slots,this.emptySlot];}
+  get slotAnchorX(){return this.boundingRect[0]+(this.side==='inputs'?this.boundingRect[2]-14:14);}
+  get size(){return this.boundingRect.slice(2);}
+  set size(value){this.boundingRect[2]=value[0];this.boundingRect[3]=value[1];}
+  arrange(){let y=this.boundingRect[1]+14,w=100;for(const s of this.allSlots){const [width,height]=s.measure();s.arrange([this.slotAnchorX,y,width,height]);y+=height;w=Math.max(w,width);}this.size=[w+28,y-this.boundingRect[1]+14];}
+  getSlotInPosition(x,y){return this.allSlots.find(s=>s.boundingRect.containsXy(x,y));}
+  onPointerEnter(){this.isPointerOver=true;}
+  onPointerLeave(){this.isPointerOver=false;for(const slot of this.slots)slot.isPointerOver=false;}
+  onPointerMove(e){for(const slot of this.allSlots)slot.onPointerMove(e);}
+}
+if(process.argv[2]) {
+  const source=fs.readFileSync(process.argv[2],'utf8');
+  const base=source.slice(source.indexOf('class SubgraphIONodeBase'),source.indexOf('SubgraphInputNode=class'));
+  const slice=(text,start,end)=>text.slice(text.indexOf(start),text.indexOf(end,text.indexOf(start)));
+  const Native=vm.runInNewContext('class Native {'+
+    slice(base,'arrange(){','draw(e,t,n,r){')+
+    slice(base,'getSlotInPosition(','handleSlotDoubleClick(')+
+    slice(base,'onPointerMove(','onPointerEnter(){')+'};Native',
+    {SubgraphIONodeBase:Boundary,zr:{SubgraphIoNode:1,Nothing:0,SubgraphIoSlot:2}});
+  for(const name of ['arrange','getSlotInPosition','onPointerMove'])Boundary.prototype[name]=Native.prototype[name];
+  for(const [name,next,input] of [['SubgraphInput=class','EmptySubgraphInput=class',true],['SubgraphOutput=class','EmptySubgraphOutput=class',false]]) {
+    const text=source.slice(source.indexOf(name),source.indexOf(next));
+    const SlotNative=vm.runInNewContext('class Native {'+slice(text,'arrange(e){','isValidTarget(')+'};Native');
+    const old=BoundarySlot.prototype.arrange;
+    BoundarySlot.prototype.arrange=function(...args){return this.input===input?SlotNative.prototype.arrange.apply(this,args):old.apply(this,args);};
+  }
+  console.log('Using installed native subgraph boundary layout, input/output anchors and label hit tests');
+}
+const root={_nodes:[],beforeChange(){},change(){},afterChange(){}};
+function subgraph() {
+  const g={_nodes:[],rootGraph:root,extra:{other:'kept'},events:[],setDirtyCanvas(){},
+    beforeChange(){this.events.push('before');},change(){this.events.push('change');},afterChange(){this.events.push('after');}};
+  for(const side of ['inputs','outputs'])g[side]=['one','two','three'].map((n,i)=>new BoundarySlot(side+i,n,side==='inputs'));
+  g.inputNode=new Boundary(g,'inputs');g.outputNode=new Boundary(g,'outputs');
+  return g;
+}
+function host(g,id) {
+  const n=new Node();n.id=id;n.graph=root;n.subgraph=g;n.widgets=[];
+  for(const side of ['inputs','outputs'])n[side]=g[side].map((s,i)=>new Slot(s.name,
+    side==='inputs'?{_subgraphSlot:s,link:100+i}:{links:[200+i]}));
+  extension.nodeCreated(n);n.arrange();return n;
+}
+const sg=subgraph(), h1=host(sg,101),h2=host(sg,102);
+root._nodes=[h1,{subgraph:{_nodes:[h2]}}];context.app.rootGraph=root;
+extension.afterConfigureGraph();
+const topology=()=>JSON.stringify({inputs:sg.inputs.map(s=>[s.id,s.linkIds]),outputs:sg.outputs.map(s=>[s.id,s.linkIds]),
+  hosts:[h1,h2].map(h=>[h.inputs.map(s=>[s.name,s.link]),h.outputs.map(s=>[s.name,s.links])])});
+const originalTopology=topology();
+const visible=slots=>[...slots].sort((a,b)=>a.pos[1]-b.pos[1]).map(s=>s.id);
+function hoverBoundary(panel,index){
+  canvas.graph=panel.subgraph;canvas.selected_nodes={};canvas.node_over=h1;
+  const s=index==='empty'?panel.emptySlot:panel.slots[index];
+  canvas.graph_mouse=[s.boundingRect[0]+s.boundingRect[2]/2,s.pos[1]];
+  listeners.pointermove({composedPath:()=>[canvas.canvas],clientX:500,clientY:400});
+}
+for(const side of ['inputs','outputs']) {
+  const panel=side==='inputs'?sg.inputNode:sg.outputNode;
+  hoverBoundary(panel,1);assert.equal(context.document.body.hint.hidden,false);
+  assert.match(context.document.body.hint.textContent,/子图内外同步/);
+  const before=sg.events.length;assert(press('ArrowUp').prevented);
+  assert.deepEqual(sg.events.slice(before),['before','change','after'],'Boundary edit has one undo transaction');
+  assert.deepEqual(visible(sg[side]),[side+'1',side+'0',side+'2']);
+  for(const h of [h1,h2])assert.deepEqual(clean(ordered(h,side).map(e=>e.slot.name)),['two','one','three'],'All hosts, including nested instances, follow internal order');
+  assert.equal(panel.getSlotInPosition(...canvas.graph_mouse),sg[side][0],'Hit target follows the row now under the pointer');
+  assert.equal(sg[side][0].isPointerOver,true,'Native hover updates without moving the pointer');
+  const key=side==='inputs'?'getInputPos':'getOutputPos';
+  assert(h2[key](1)[1]<h2[key](0)[1]);
+  const emptyY=panel.emptySlot.pos[1];
+  hoverBoundary(panel,'empty');assert.equal(context.document.body.hint.hidden,true);assert.equal(press('ArrowUp').prevented,undefined);
+  assert.equal(panel.emptySlot.pos[1],emptyY,'Grey add socket stays last');
+  canvas.selected_nodes={101:h1};hover(h1,side,2);assert(press('ArrowUp').prevented);
+  assert.deepEqual(visible(sg[side]),[side+'1',side+'2',side+'0'],'External arrow updates the boundary');
+  assert(h2[key](2)[1]<h2[key](0)[1],'Sibling instance updates after external arrow');
+  assert.equal(topology(),originalTopology,'Link indices and raw slot arrays are unchanged in both directions');
+}
+assert.equal(sg.extra.other,'kept');
+const savedExtra=clean(sg.extra), savedH1=clean(h1.properties);
+const restored=subgraph();restored.extra=clean(savedExtra);
+const fresh=host(restored,103);fresh.properties=clean(savedH1);
+root._nodes.push(fresh);extension.afterConfigureGraph();
+for(const side of ['inputs','outputs'])assert.deepEqual(visible(restored[side]),[side+'1',side+'2',side+'0'],'Shared order survives save/reload');
+const added=host(sg,104);root._nodes.push(added);
+assert.deepEqual(clean(ordered(added,'outputs').map(e=>e.slot.name)),['two','three','one'],'A new instance uses the shared order');
+sg.outputs[1].name='renamed';h1.outputs[1].name='renamed';h2.outputs[1].name='renamed';
+h1.arrange();sg.outputNode.arrange();
+assert.equal(ordered(h1,'outputs')[0].slot.name,'renamed','Boundary UUID keeps order across rename');
+const originalSize=clean(sg.outputNode.size);
+for(let i=0;i<100;i++){sg.outputNode.arrange();h1.arrange();h1.serializeFromStoreState();}
+assert.deepEqual(clean(sg.outputNode.size),originalSize,'Boundary height is stable over repeated layout');
+assert.deepEqual(visible(sg.outputs),['outputs1','outputs2','outputs0']);
+sg.outputs.push(new BoundarySlot('outputs3','new',false));h1.outputs.push(new Slot('new',{links:[]}));
+sg.outputNode.arrange();h1.arrange();
+assert.deepEqual(visible(sg.outputs),['outputs1','outputs2','outputs0','outputs3']);
+assert.deepEqual(clean(ordered(h1,'outputs').map(e=>e.slot.name)),['renamed','three','one','new']);
+sg.outputs.splice(1,1);h1.outputs.splice(1,1);sg.outputNode.arrange();h1.arrange();
+assert.deepEqual(visible(sg.outputs),['outputs2','outputs0','outputs3'],'Removed slot is skipped without reassigning identities');
+for(const [obj,key] of [[canvas,'read_only'],[canvas.pointer,'isDown'],[canvas.linkConnector,'isConnecting'],[LiteGraph,'vueNodesMode']]) {
+  hoverBoundary(sg.inputNode,0);obj[key]=true;assert.equal(press('ArrowUp').prevented,undefined);obj[key]=false;
+}
+hoverBoundary(sg.inputNode,1);
+assert.equal(press('ArrowDown',{composedPath:()=>[{isContentEditable:true}]}).prevented,undefined);
+assert.equal(press('ArrowDown',{ctrlKey:true}).prevented,undefined);
+const single=subgraph();single.inputs.length=1;single.inputNode.arrange();hoverBoundary(single.inputNode,0);
+assert.equal(press('ArrowDown').prevented,undefined,'A single boundary port has no neighbor');
+// Native undo restores the serialized shared record, then calls afterConfigureGraph.
+delete restored.extra[PROPERTY];fresh.properties={};extension.afterConfigureGraph();
+assert.deepEqual(visible(restored.outputs),['outputs0','outputs1','outputs2']);
+restored.extra=clean(savedExtra);extension.afterConfigureGraph();
+assert.deepEqual(visible(restored.outputs),['outputs1','outputs2','outputs0']);
+const resetHost=host(subgraph(),105);root._nodes.push(resetHost);
+applyOrder(resetHost,{outputs:entries(resetHost,'outputs').map(e=>e.key).reverse()});
+assert.equal(resetHost.subgraph.extra[PROPERTY].inputs,null,'Output-only swap does not activate input widget layout');
+applyOrder(resetHost,{});
+assert.equal(resetHost.outputs[0].pos,undefined,'Reset restores native positions');
+console.log('PASS: boundary arrows without selection, bidirectional shared order, nested/new instances, stable IDs, save/undo, grey socket and unchanged connections');
+
+const portExtension=extension;
+vm.runInContext(fs.readFileSync(path.join(__dirname,'../graph_layout.js'),'utf8')
+  .replace(/^import .*;\r?$/gm,'').replace('const PROPERTY = "liuxinyu_port_order";','')+
+  '\nglobalThis.layoutHelpers = {checkpoint,apply,restore};',context);
+extension=portExtension;
+const layout=context.layoutHelpers;
+const trialGraph=subgraph(),trialHost=host(trialGraph,201),trialPeer=host(trialGraph,202);
+root._nodes=[trialHost,trialPeer];
+const trialState=()=>JSON.stringify({extra:trialGraph.extra,hosts:[trialHost,trialPeer].map(h=>({properties:h.properties,size:h.size,pos:h.pos,
+  inputY:h.inputs.map((s,i)=>h.getInputPos(i)[1]),outputY:h.outputs.map((s,i)=>h.getOutputPos(i)[1])})),
+  inputs:visible(trialGraph.inputs),outputs:visible(trialGraph.outputs)});
+extension.afterConfigureGraph();
+const candidate=[{id:'201',pos:[800,200],inputs:[2,0,1],outputs:[1,2,0]}];
+for(const initial of [null,{outputs:entries(trialHost,'outputs').map(e=>e.key).reverse()}]) {
+  if(initial)applyOrder(trialHost,initial);
+  const saved=layout.checkpoint([trialHost]),before=trialState();
+  assert.equal(saved.length,2,'Trial checkpoints include sibling instances affected by shared order');
+  layout.apply([trialHost],candidate);
+  assert.deepEqual(visible(trialGraph.inputs),['inputs2','inputs0','inputs1']);
+  assert(trialPeer.getOutputPos(1)[1]<trialPeer.getOutputPos(0)[1]);
+  layout.restore(saved);
+  assert.equal(trialState(),before,'Trial rollback restores both sides and sibling dimensions, including prior shared order');
+}
+context.BoundaryFixture=Boundary;
+vm.runInContext('installBoundaryLayout(BoundaryFixture.prototype)',context);
+const later=subgraph();later.extra[PROPERTY]={version:1,outputs:entries(later,'outputs').map(e=>e.key).reverse()};
+later.outputNode.arrange();
+assert.deepEqual(visible(later.outputs),['outputs2','outputs1','outputs0'],'Prototype hook covers boundaries created after setup');
+console.log('PASS: automatic layout shared-order trial/rollback and newly created boundary prototype hook');
+
+// Exercise the shared multiline extension against actual native layout and the
+// port-order wrapper together; either extension may be registered first.
+vm.runInContext('(function(){'+fs.readFileSync(path.join(__dirname,'../multiline_collapse.js'),'utf8')
+  .replace(/^import .*;\r?$/gm,'')+'})()',context);
+const collapseExtension=extension;extension=portExtension;
+class MultilineNode extends Node {
+  constructor(type) {
+    super();this.comfyClass=type;this.size=[360,500];
+    this.inputs=[new Slot('check'),new Slot('prompt',{widget:{name:'prompt'}}),new Slot('system',{widget:{name:'system'}})];
+    this.widgets=['prompt','system'].map(name=>({name,type:'customtext',value:name+' preserved',element:{tagName:'TEXTAREA'},
+      computeLayoutSize(){return {minHeight:160,maxHeight:160,minWidth:0};}}));
+    this.widgets.push({name:'option',value:3,computeSize(){return [100,20];}});
+  }
+  isInputConnected(i){return this.inputs[i]?.link!=null;}
+  isWidgetVisible(w){return !w.hidden;}
+  getLayoutWidgets(){return this.widgets.filter(w=>!w.hidden);}
+  getWidgetFromSlot(input){return this.widgets.find(w=>w.name===input?.widget?.name);}
+  computeSize(){return [360,54+this.getLayoutWidgets().reduce((h,w)=>h+(w.computeSize?w.computeSize()[1]:w.computeLayoutSize().minHeight)+4,0)];}
+}
+if(process.argv[2]) {
+  const source=fs.readFileSync(process.argv[2],'utf8'),start=source.indexOf('computeSize(e){');
+  context.Jl={_measureText:text=>String(text).length*7};
+  Object.assign(LiteGraph,{NODE_TEXT_SIZE:14,NODE_WIDTH:140});
+  Object.assign(context.Zc,{arrowMargin:3,arrowWidth:8,minValueWidth:20});
+  vm.runInContext('globalThis.NativeSize = class {'+source.slice(start,source.indexOf('inResizeCorner(',start))+'}',context);
+  MultilineNode.prototype.computeSize=context.NativeSize.prototype.computeSize;
+}
+(async()=>{
+  for(const first of ['port','collapse']) {
+    const n=new MultilineNode('LiuxinyuTextFromTemplate');
+    n.size=[400,376];
+    n.inputs=[new Slot('strings.t1'),new Slot('parameters',{link:4}),new Slot('template',{widget:{name:'template'}})];
+    n.outputs=[new Slot('strings')];
+    n.widgets=[{name:'template',type:'customtext',value:'preserved',element:{tagName:'TEXTAREA'},
+      computeLayoutSize(){return {minHeight:50,minWidth:0};}}];
+    // Native configure has assigned public slots, but the first measure pass has
+    // not yet rebuilt the concrete cache used by native arrange().
+    Object.defineProperty(n,'_concreteInputs',{value:[],writable:true});
+    Object.defineProperty(n,'_concreteOutputs',{value:[],writable:true});
+    n._setConcreteSlots=function(){this._concreteInputs=this.inputs;this._concreteOutputs=this.outputs;};
+    n.properties[PROPERTY]={version:1,inputs:[entries(n,'inputs')[1].key,entries(n,'inputs')[0].key,entries(n,'inputs')[2].key],outputs:entries(n,'outputs').map(e=>e.key)};
+    for(const ext of first==='port'?[portExtension,collapseExtension]:[collapseExtension,portExtension])ext.nodeCreated(n);
+    await Promise.resolve();
+    for(let i=0;i<4;i++){
+      n._concreteInputs=[];n._concreteOutputs=[];
+      n.onConfigure();await Promise.resolve();n.arrange();
+      assert.equal(n.size[1],376,'Configure with an empty native slot cache must retain the saved height');
+      assert.equal(n.widgets[0].value,'preserved');
+      assert(n.widgets[0].y+n.widgets[0].computedHeight<=376,'Editor remains inside the saved node bounds');
+    }
+  }
+  console.log('PASS: sorted flexible textarea retains saved height before native slot caches are rebuilt');
+})().catch(error=>{console.error(error);process.exitCode=1;});
+(async()=>{
+  for(const first of ['port','collapse'])for(const type of ['LiuxinyuTextFromTemplate','llm_remote_reply','LLMHarnessBooleanReturn','subgraph']) {
+    const n=new MultilineNode(type);
+    if(type==='subgraph'){
+      n.subgraph=subgraph();n.subgraph.inputs=n.inputs.map((s,i)=>new BoundarySlot('shared-'+i,s.name,true));
+      n.inputs.forEach((s,i)=>{s._subgraphSlot=n.subgraph.inputs[i];s._widget=n.getWidgetFromSlot(s);});
+    }
+    for(const ext of first==='port'?[portExtension,collapseExtension]:[collapseExtension,portExtension])ext.nodeCreated(n);
+    await Promise.resolve();
+    n.setSize([360,n.computeSize()[1]]);n.arrange();const expanded=n.size[1];
+    const originalValues=n.widgets.map(w=>w.value);
+    n.inputs[1].link=40;n.onConnectionsChange();await Promise.resolve();
+    assert(n.size[1]<expanded,'Connecting one editor removes its height');
+    assert(n.getInputPos(2)[1]-n.getInputPos(1)[1]<=24,'Collapsed editor leaves only a compact socket row');
+    assert.equal(n.widgets[1].hidden,false,'Unconnected editor remains visible');
+    const oneConnected=n.size[1];n.inputs[2].link=41;n.onConnectionsChange();await Promise.resolve();
+    assert(n.size[1]<oneConnected,'Second editor independently releases height');
+    const compact=n.size[1],drawn=[];n.drawSlots({save(){},restore(){},fillText(...args){drawn.push(args);}});
+    assert.deepEqual(drawn.map(v=>v[0]),['prompt','system'],'Hidden editors retain their port labels');
+    assert(drawn.every(v=>v[2]<compact),'Port labels remain inside the compact node');
+    applyOrder(n,{inputs:entries(n,'inputs').map(e=>e.key).reverse()});
+    const sorted=n.size[1];
+    for(let i=0;i<100;i++){n.arrange();n.serializeFromStoreState();assert.equal(n.size[1],sorted,'Connected, sorted layouts do not grow repeatedly');}
+    assert(n.getInputPos(2)[1]<n.getInputPos(1)[1]);
+    assert.equal(n.inputs[1].link,40);assert.equal(n.inputs[2].link,41);
+    assert.deepEqual(n.widgets.map(w=>w.value),originalValues);
+    n.inputs[1].link=null;n.onConnectionsChange();await Promise.resolve();
+    assert(n.size[1]>sorted,'Unplug restores usable editing height under saved port ordering');
+    assert.equal(n.widgets[0].hidden,false);assert.equal(n.widgets[1].hidden,true);
+    const reopened=n.size[1];for(let i=0;i<20;i++){n.arrange();assert.equal(n.size[1],reopened);}
+  }
+  console.log('PASS: native multiline collapse + port sorting in both extension orders, harness/subgraph widgets, labels, stable sizes and values');
+})().catch(error=>{console.error(error);process.exitCode=1;});
+
+// Actual compound text blocks: header + editor + paired output, with all three
+// extensions installed. Run against the native methods above when supplied.
+context.ComfyWidgets={STRING(node,name,[,options]){
+  const widget={name,type:'customtext',value:options.default,options:{},element:{tagName:'TEXTAREA'},
+    computeLayoutSize(){return {minHeight:this.options.getMinHeight(),maxHeight:this.options.getMaxHeight(),minWidth:0};}};
+  node.widgets.push(widget);return {widget};
+}};
+vm.runInContext('(function(){'+fs.readFileSync(path.join(__dirname,'../dynamic_multiline.js'),'utf8')
+  .replace(/^\uFEFF/,'').replace(/^import .*;\r?$/gm,'')+'})()',context);
+const dynamicExtension=extension;extension=portExtension;
+class BlockNode extends MultilineNode {
+  constructor(){super('LiuxinyuDynamicMultilineText');this.inputs=[];this.outputs=[];
+    this.widgets=[{name:'blocks_json',value:'["first","second","third","fourth"]'}];}
+  addInput(name,type,options){this.inputs.push(new Slot(name,{type,link:null,...options}));}
+  addOutput(name,type){this.outputs.push(new Slot(name,{type,links:[]}));}
+  removeInput(i){this.inputs.splice(i,1);}
+  removeOutput(i){this.outputs.splice(i,1);}
+  addCustomWidget(w){this.widgets.push(w);return w;}
+  addWidget(type,name,value,callback,options){return this.addCustomWidget({type,name,value,callback,options,computeSize:()=>[0,20]});}
+  removeWidget(w){this.widgets.splice(this.widgets.indexOf(w),1);}
+  getWidgetFromSlot(slot){return slot._widget||super.getWidgetFromSlot(slot);}
+}
+const editor=(n,i)=>n.widgets.find(w=>w.name===`texts.text${i+1}`);
+const blockOrder=n=>n.inputs.map((s,i)=>i).sort((a,b)=>n.inputs[a]._widget.y-n.inputs[b]._widget.y);
+function assertBlocks(n){
+  for(const [i,input] of n.inputs.entries()){
+    const header=input._widget,text=editor(n,i);
+    assert.equal(text.width,undefined,'Adjacent output rows must not narrow a text editor');
+    assert.equal(n.getInputPos(i)[1]-n.pos[1],header.y+10,'Socket stays on its own header');
+    if(!text.hidden)assert.equal(text.y,header.y+header.computedHeight,'Editor immediately follows its header');
+    if(!n.properties[PROPERTY]?.outputs)assert.equal(n.getOutputPos(i)[1]-n.pos[1],header.y+10,'Unsorted output follows its text block');
+    const hit=n.getInputOnPos(n.getInputPos(i));assert.equal(hit,input,'Socket hit region follows the moved header');
+  }
+  const button=n.widgets.at(-1);
+  assert(button.y>=Math.max(...n.inputs.map((s,i)=>editor(n,i).hidden?s._widget.y+s._widget.computedHeight:editor(n,i).y+editor(n,i).computedHeight)),
+    'Add button stays below all whole blocks');
+}
+(async()=>{
+  const orders=[[dynamicExtension,collapseExtension,portExtension],[portExtension,dynamicExtension,collapseExtension],
+    [collapseExtension,portExtension,dynamicExtension],[collapseExtension,dynamicExtension,portExtension],
+    [portExtension,collapseExtension,dynamicExtension],[dynamicExtension,portExtension,collapseExtension]];
+  for(const sequence of orders){
+    const n=new BlockNode();for(const ext of sequence)ext.nodeCreated(n);await Promise.resolve();n.arrange();
+    const originals=n.inputs.slice(),outputs=n.outputs.slice(),values=n.widgets[0].value;
+    const ys=n.outputs.map((s,i)=>n.getOutputPos(i)[1]);
+    const outputKeys=entries(n,'outputs').map(e=>e.key);
+    applyOrder(n,{outputs:[outputKeys[1],outputKeys[0],...outputKeys.slice(2)]});
+    assert.deepEqual(n.outputs.map((s,i)=>n.getOutputPos(i)[1]),[ys[1],ys[0],ys[2],ys[3]],'Output-only swap preserves the other native block anchors');
+    const keys=entries(n,'inputs').map(e=>e.key);
+    applyOrder(n,{inputs:[keys[1],keys[0],keys[2],keys[3]]});
+    assert.deepEqual(blockOrder(n),[1,0,2,3]);assertBlocks(n);
+    n.inputs[0].link=50;n.inputs[2].link=52;n.onConnectionsChange();await Promise.resolve();assertBlocks(n);
+    assert.equal(editor(n,0).hidden,true);assert.equal(editor(n,1).hidden,false);
+    applyOrder(n,{inputs:[keys[1],keys[0],keys[2],keys[3]],outputs:[outputKeys[2],outputKeys[0],outputKeys[1],outputKeys[3]]});
+    const outputOrder=()=>n.outputs.map((s,i)=>i).sort((a,b)=>n.getOutputPos(a)[1]-n.getOutputPos(b)[1]);
+    assert.deepEqual(outputOrder(),[2,0,1,3]);assertBlocks(n);
+    const size=n.size[1];for(let i=0;i<50;i++){n.arrange();n.serializeFromStoreState();assertBlocks(n);assert.equal(n.size[1],size);}
+    n.inputs[0].link=null;n.onConnectionsChange();await Promise.resolve();assertBlocks(n);
+    assert.deepEqual(n.inputs,originals);assert.deepEqual(n.outputs,outputs);assert.equal(n.widgets[0].value,values);
+    n.widgets.at(-1).callback();await Promise.resolve();assert.equal(n.inputs.length,5);assertBlocks(n);
+    const savedOrder=clean(n.properties[PROPERTY]),stored=n.widgets[0].value;
+    const restored=new BlockNode();for(const ext of sequence)ext.nodeCreated(restored);await Promise.resolve();
+    restored.properties[PROPERTY]=savedOrder;restored.widgets[0].value=stored;restored.onConfigure();await Promise.resolve();restored.arrange();
+    assert.deepEqual(blockOrder(restored),[1,0,2,3,4]);assertBlocks(restored);
+    assert.deepEqual(restored.outputs.map((s,i)=>i).sort((a,b)=>restored.getOutputPos(a)[1]-restored.getOutputPos(b)[1]),[2,0,1,3,4],
+      'Independent output order survives saving and rebuilding text blocks');
+    assert.equal(restored.widgets[0].value,stored);
+  }
+  console.log('PASS: real dynamic text + collapse + port order in six registration orders; compound rows, output anchors, connections, add, reload and stable height');
+})().catch(error=>{console.error(error);process.exitCode=1;});
+
+// Use the actual picker extension; opening OS dialogs is not part of layout tests.
+vm.runInContext('(function(){'+fs.readFileSync(path.join(__dirname,'../folder_picker.js'),'utf8')
+  .replace(/^import .*;\r?$/gm,'')
+  .replace(/const previewErrorBridge = import\([\s\S]*?\nconst SAVE_IMAGE_NODE/, 'const previewErrorBridge = Promise.resolve(null);\nconst SAVE_IMAGE_NODE')+
+  ';globalThis.pickerTesting={setupImageBatchPicker};})()',context);
+const pickerExtension=extension;extension=portExtension;
+(async()=>{
+  const cases=[['SaveImageToAbsolutePath','folder'],['LoadDirectory','path'],['MatchPath','directory'],['LiuxinyuLoadTextFile','path']];
+  for(const [type,name] of cases)for(const sequence of [[pickerExtension,portExtension],[portExtension,pickerExtension]]){
+    const n=new BlockNode();n.comfyClass=type;n.outputs=[];
+    n.inputs=[new Slot('images'),...[name,'filename','overwrite'].map(name=>new Slot(name,{widget:{name}}))];
+    n.widgets=[name,'filename','overwrite'].map(name=>({name,value:name+' value',computeSize:()=>[200,20]}));
+    for(const ext of sequence)await ext.nodeCreated(n);
+    n.arrange();const folder=n.widgets.find(w=>w.name===name),button=n.widgets.find(w=>w.type==='button');
+    const before=n.serializeFromStoreState(),refs=n.widgets.slice();
+    const keys=entries(n,'inputs').map(e=>e.key);
+    applyOrder(n,{inputs:[keys[1],keys[0],keys[2],keys[3]]});
+    assert.equal(button.y,folder.y+folder.computedHeight,'Folder picker stays directly below its folder input after moving the IMAGE port');
+    assert(n.getInputPos(0)[1]-n.pos[1]>=button.y+button.computedHeight,'The image socket moves below the complete folder row');
+    for(const order of [keys.slice().reverse(),[keys[1],keys[0],keys[2],keys[3]]]){
+      applyOrder(n,{inputs:order});n.setSize([500,n.size[1]]);
+      const size=n.size.slice();
+      for(let i=0;i<25;i++){
+        n.arrange();n.serializeFromStoreState();
+        assert.equal(button.y,folder.y+folder.computedHeight);
+        assert.deepEqual(n.size,size);
+      }
+    }
+    assert.deepEqual(n.widgets,refs,'Controls are never reordered for serialization');
+    applyOrder(n,{});assert.deepEqual(n.serializeFromStoreState(),before,'Reset returns to native slots without touching values');
+  }
+  console.log('PASS: actual folder/file pickers follow their inputs; registration order, resize, repeat, reset and serialization');
+})().catch(error=>{console.error(error);process.exitCode=1;});
+
+vm.runInContext('(function(){'+fs.readFileSync(path.join(__dirname,'../key_value_pairs.js'),'utf8')
+  .replace(/^import .*;\r?$/gm,'')+'})()',context);
+const keyExtension=extension;extension=portExtension;
+class KeyNode extends Node {}
+keyExtension.beforeRegisterNodeDef(KeyNode,{name:'LiuxinyuBuildKeyValuePairs'});
+for(const sequence of [[keyExtension,portExtension],[portExtension,keyExtension]]){
+  const n=new KeyNode();n.comfyClass='LiuxinyuBuildKeyValuePairs';
+  n.inputs=[new Slot('value'),new Slot('key',{widget:{name:'key'}})];n.outputs=[new Slot('dictionary')];
+  n.widgets=[{name:'key',value:'test',computeSize:()=>[300,20]}];
+  for(const ext of sequence)ext.nodeCreated(n);
+  n.arrange();const oldTop=n.getInputPos(1)[1];
+  applyOrder(n,{inputs:entries(n,'inputs').map(e=>e.key)});
+  assert.equal(n.getInputPos(0)[1],oldTop,'The value actually moves into the former top key row');
+  assert(n.getInputPos(1)[1]>n.getInputPos(0)[1]);
+}
+console.log('PASS: custom key-first widget layout exchanges rows without introducing blank space above');
+
+{
+  const n=new Node();n.outputs=[];n.inputs=[new Slot('a',{widget:{name:'a'}}),new Slot('b',{widget:{name:'b'}})];
+  const control=name=>({name,computeSize:()=>[200,20]});
+  const a=control('a'),aux=control('auxiliary'),b=control('b');a.linkedWidgets=[aux];
+  n.widgets=[a,aux,b];portExtension.nodeCreated(n);n.arrange();
+  applyOrder(n,{inputs:entries(n,'inputs').map(e=>e.key).reverse()});
+  assert.equal(aux.y,a.y+a.computedHeight,'Native linked auxiliary control travels with owner');
+  assert.equal(context.inputWidgetGroup(n,n.inputs[0]).length,2);
+  n.inputs.push(new Slot('auxiliary',{widget:{name:'auxiliary'}}));n.arrange();
+  assert.equal(context.inputWidgetGroup(n,n.inputs[0]).length,1,'An auxiliary with its own input can be moved independently');
+}
+
+{
+  const n=new BlockNode();n.comfyClass='LoadImageBatchFromPath';n.outputs=[];
+  n.inputs=['path','target_width','target_height'].map(name=>new Slot(name,{widget:{name}}));
+  n.widgets=n.inputs.map(s=>({name:s.name,value:s.name,computeSize:()=>[300,20]}));
+  context.pickerTesting.setupImageBatchPicker(n);portExtension.nodeCreated(n);n.arrange();
+  const pathWidget=n.widgets[0],buttons=n.widgets.filter(w=>w.type==='button');
+  applyOrder(n,{inputs:entries(n,'inputs').map(e=>e.key).reverse()});
+  assert.equal(buttons[0].y,pathWidget.y+pathWidget.computedHeight);
+  assert.equal(buttons[1].y,buttons[0].y+buttons[0].computedHeight,'Both batch path picker buttons travel together');
+}
+
+{
+  // Output-only swaps change label widths, though they occupy the same rows.
+  const n=new Node();n.inputs=[];n.widgets_start_y=4;
+  n.widgets=[{name:'custom',computeSize:()=>[300,20]}];
+  n.outputs=[new Slot('x'),new Slot('A much longer output label')];
+  portExtension.nodeCreated(n);n.arrange();const keys=entries(n,'outputs').map(e=>e.key);
+  applyOrder(n,{outputs:keys});const narrowLabelWidth=n.widgets[0].width;
+  assert(narrowLabelWidth>80,'The following label only touches control padding and must not shrink it');
+  applyOrder(n,{outputs:keys.slice().reverse()});
+  assert(n.widgets[0].width<narrowLabelWidth,'Output-only swap recalculates space for the new label');
+  applyOrder(n,{});assert.equal(n.widgets[0].width,undefined,'Reset restores native width');
+}

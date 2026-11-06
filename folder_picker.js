@@ -331,6 +331,7 @@ function setupFolderPicker(node) {
   }
 
   button.label = "选择文件夹";
+  button.liuxinyuInputName = "folder";
   node.setDirtyCanvas(true, true);
 }
 
@@ -352,6 +353,7 @@ function setupDirectoryPicker(node, widgetName = "path") {
     },
   );
   button.label = "选择文件夹";
+  button.liuxinyuInputName = widgetName;
   moveWidgetAfter(node, button, widgetName);
   node.setDirtyCanvas(true, true);
 }
@@ -361,7 +363,7 @@ function setupImageBatchPicker(node) {
   if (!path || path.__imageBatchPicker) return;
   path.__imageBatchPicker = true;
 
-  node.addWidget("button", "选择图片（多选）", "select_images", async () => {
+  const imagesButton = node.addWidget("button", "选择图片（多选）", "select_images", async () => {
     try {
       const query = new URLSearchParams({ path: String(path.value ?? "") });
       const response = await fetch(`/save_image_to_path/select_images?${query}`, {
@@ -381,9 +383,11 @@ function setupImageBatchPicker(node) {
       console.error("[SaveImageToPath] Image picker failed:", error);
     }
   }, { serialize: false, canvasOnly: true });
-  node.addWidget("button", "选择文件夹", "select_image_folder", async () => {
+  imagesButton.liuxinyuInputName = "path";
+  const folderButton = node.addWidget("button", "选择文件夹", "select_image_folder", async () => {
     await openFolderPicker(path);
   }, { serialize: false, canvasOnly: true });
+  folderButton.liuxinyuInputName = "path";
   node.setDirtyCanvas(true, true);
 }
 
@@ -414,6 +418,7 @@ function setupFilePicker(node) {
   }
 
   button.label = "选择文件";
+  button.liuxinyuInputName = "path";
   node.setDirtyCanvas(true, true);
 }
 
@@ -450,6 +455,7 @@ function setupBatchSelector(node) {
     },
   );
   state.button = button;
+  button.liuxinyuInputName = "filename";
 
   // DOM 网格容器：挂到节点上的官方 DOM widget 槽位，内部完全用普通 HTML/CSS 布局
   const container = document.createElement("div");

@@ -18,7 +18,8 @@ function chooseFileVersion(path, savedAt, modified, manual = false) {
   title.style.cssText = "font-size:18px;margin:0 0 16px";
   const message = document.createElement("p");
   message.style.cssText = "white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.7";
-  message.textContent = `${path}\n\n上次前端保存：${new Date(savedAt).toLocaleString()}\n后端文件修改：${new Date(modified).toLocaleString()}\n\n页面已按原方式恢复。是否将当前页面同步到实际文件的最新内容？同步会替换当前页面内容；什么都不做则继续编辑当前内容。`;
+  const reason = manual ? "当前画布与后端文件内容不同。" : "页面已按原方式恢复。";
+  message.textContent = `${path}\n\n上次前端保存：${new Date(savedAt).toLocaleString()}\n后端文件修改：${new Date(modified).toLocaleString()}\n\n${reason}是否将当前页面同步到实际文件的最新内容？同步会替换当前页面内容；什么都不做则继续编辑当前内容。`;
   const actions = document.createElement("div");
   actions.style.cssText = "display:flex;gap:12px;justify-content:flex-end;flex-wrap:wrap;margin-top:20px";
   const keep = document.createElement("button");
@@ -75,7 +76,7 @@ let manualCheck;
 
 // Report the fields considered by the native dirty check. This deliberately
 // does not normalize the live graph or change its saved baseline.
-function describeWorkflowDifferences(before, after) {
+function workflowDifferences(before, after) {
   const lines = [];
   const limit = 60;
   const preview = (value) => {
@@ -111,7 +112,11 @@ function describeWorkflowDifferences(before, after) {
       key === "extra" ? after?.extra ?? {} : after?.[key], key);
   }
   if (lines.length >= limit) lines.push("仅显示前 60 处差异。");
-  return lines.join("\n") || "未发现字段差异。";
+  return lines;
+}
+
+function describeWorkflowDifferences(before, after) {
+  return workflowDifferences(before, after).join("\n") || "未发现字段差异。";
 }
 
 function showUnsavedDifferences() {
@@ -273,8 +278,25 @@ app.registerExtension({
         if (!isCurrent() || !info) return;
         const revision = `${info.modified}:${info.size}`;
         if (!force && (!(info.modified > savedAt) || record.acknowledged === revision)) return;
-        // File mtime defines a change, including edit-then-revert. Do not
-        // suppress the question because the two JSON contents are equal.
+        if (force) {
+          const response = await api.getUserData(path, { cache: "no-store" });
+          if (!isCurrent()) return;
+          if (!response.ok) throw new Error(`工作流文件读取失败 (${response.status})`);
+          const content = await response.text();
+          if (!isCurrent()) return;
+          const graph = JSON.parse(content);
+          if (!graph || !Array.isArray(graph.nodes)) throw new Error("文件不是画布工作流");
+          // Read the live canvas after the download, not the last captured
+          // draft: edits made since that capture must participate in the check.
+          if (workflowDifferences(graph, app.rootGraph.serialize()).length === 0) {
+            records.set(path, { ...records.get(path), acknowledged: revision });
+            persist();
+            manager.toast?.add({ severity: "success", summary: "无需更新",
+              detail: "当前工作流与后端文件内容一致。", life: 4000 });
+            return;
+          }
+        }
+        // Automatic checks remain timestamp-based, including edit-then-revert.
         const prompt = chooseFileVersion(path, savedAt, info.modified, force);
         cancelPrompt = prompt.cancel;
         const choice = await prompt.result;
@@ -287,7 +309,7 @@ app.registerExtension({
           return;
         }
 
-        // Fetch only after the user chooses sync, so changes made while the
+        // Fetch again after the user chooses sync, so changes made while the
         // question was open are included. No write request is made.
         const latestInfo = await fileInfo(path);
         const response = await api.getUserData(path, { cache: "no-store" });

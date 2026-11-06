@@ -71,7 +71,7 @@ def compile_prompt(prompt):
 const fs = require('node:fs'), vm = require('node:vm');
 const context = {app: {registerExtension() {}}, queueMicrotask};
 vm.createContext(context);
-vm.runInContext(fs.readFileSync(process.argv[1], 'utf8').replace(/^import .*;$/m, '') +
+vm.runInContext(fs.readFileSync(process.argv[1], 'utf8').replace(/^import .*;/gm, '') +
   '\\nglobalThis.compile = compileConnections;', context);
 process.stdout.write(JSON.stringify(context.compile(JSON.parse(fs.readFileSync(0, 'utf8')))));
 """

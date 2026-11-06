@@ -179,33 +179,150 @@ def evaluate(nodes, edges, precise=False, report=None):
     return {"crossings": int(edge_hits), "nodeIntersections": int(node_hits), "overlaps": box_hits}
 
 
+def place_ports(n, side, order):
+    """Apply a display permutation without changing actual port identities."""
+    slots = n[side]
+    top = n.get("inputTop", n.get("startY", 0)+4)
+    rows = sorted(n["inputs"][slot["inputAnchor"]]["y"]
+                  if "inputAnchor" in slot else slot["y"] for slot in slots) if side == "outputs" else []
+    for row, i in enumerate(order):
+        slots[i]["x"] = 10 if side == "inputs" else n["size"][0]-9
+        slots[i]["y"] = top+10 if side == "inputs" else rows[row]
+        if side == "inputs":
+            top += slots[i].get("height", 20)
+    n[side+"Order"] = list(order)
+    end = (top if slots else 0) if side == "inputs" else max(rows, default=-10)+12
+    n["size"][1] = max(n["size"][1], end+n.get("freeHeight", 0))
+
+
 def reorder(nodes, edges):
     by_id = {n["id"]: n for n in nodes}
     neighbours = {}
     for e in edges:
-        neighbours.setdefault((e["source"], "outputs", e["output"]), []).append(by_id[e["target"]]["pos"][1])
-        neighbours.setdefault((e["target"], "inputs", e["input"]), []).append(by_id[e["source"]]["pos"][1])
+        neighbours.setdefault((e["source"], "outputs", e["output"]), []).append((e["target"], "inputs", e["input"]))
+        neighbours.setdefault((e["target"], "inputs", e["input"]), []).append((e["source"], "outputs", e["output"]))
+    # Read current opposite socket coordinates after each side is placed. Using
+    # node tops ties every parallel edge; sorting both ends from a stale snapshot
+    # can simply reverse the same crossing twice.
     for n in nodes:
         if not n.get("selected"):
             continue
-        end = 0
-        for side in ("outputs", "inputs"):
-            slots = n[side]
-            order = sorted(range(len(slots)), key=lambda i: (
-                (n["id"], side, i) not in neighbours,
-                sum(neighbours.get((n["id"], side, i), [n["pos"][1]+slots[i]["y"]])) /
-                len(neighbours.get((n["id"], side, i), [0])), i))
-            top = n.get("startY", 0) + 4
-            for i in order:
-                slots[i]["x"] = 10 if side == "inputs" else n["size"][0]-9
-                slots[i]["y"] = top+10
-                top += slots[i].get("height", 20) if side == "inputs" else 20
-            n[side+"Order"] = order
-            end = max(end, top)
-        n["size"][1] = max(n["size"][1], end+2+n.get("freeHeight", 0))
+        for side in ("inputs", "outputs"):
+            def key(i):
+                peers = neighbours.get((n["id"], side, i), [])
+                y = sum(by_id[p]["pos"][1]+by_id[p][s][j]["y"] for p,s,j in peers)/len(peers) if peers else n["pos"][1]+n[side][i]["y"]
+                return not peers, y, n[side][i]["y"]
+            place_ports(n, side, sorted(range(len(n[side])), key=key))
 
 
-def layered_seed(original, directed, ranks, width, height, centre, rng, edges=()):
+def refine_ports(nodes, edges, cancelled=lambda: False, seconds=2):
+    """Verify socket sweeps and conflict-local swaps against actual curves."""
+    result = copy.deepcopy(nodes)
+    checks = evaluate(result, edges, precise=True)
+    cost = layout_cost(result, edges)
+    deadline = time.monotonic()+seconds
+    for reverse in (False, True):
+        if cancelled() or time.monotonic() >= deadline:
+            return result
+        trial = copy.deepcopy(result)
+        reorder(list(reversed(trial)) if reverse else trial, edges)
+        measured = evaluate(trial, edges, precise=True)
+        trial_cost = layout_cost(trial, edges)
+        if no_more_conflicts(measured, checks) and better(measured, trial_cost, checks, cost):
+            result, checks, cost = trial, measured, trial_cost
+    # Average neighbour heights are only a heuristic for fan-in/fan-out. Try
+    # concrete exchanges at endpoints of remaining conflicts as well.
+    for _ in range(2):
+        conflicts = []
+        evaluate(result, edges, precise=True, report=conflicts)
+        ports = set()
+        for conflict in conflicts:
+            for e in conflict.get("edges", [conflict["edge"]] if "edge" in conflict else []):
+                ports.update(((e["source"], "outputs", e["output"]), (e["target"], "inputs", e["input"])))
+        improved = False
+        for index, n in enumerate(result):
+            if not n.get("selected"):
+                continue
+            for side in ("inputs", "outputs"):
+                n = result[index]
+                order = sorted(range(len(n[side])), key=lambda i: n[side][i]["y"])
+                for a in range(len(order)):
+                    for b in range(a+1, len(order)):
+                        if (n["id"],side,order[a]) not in ports and (n["id"],side,order[b]) not in ports:
+                            continue
+                        if cancelled() or time.monotonic() >= deadline:
+                            return result
+                        trial = copy.deepcopy(result)
+                        swapped = order[:]
+                        swapped[a], swapped[b] = swapped[b], swapped[a]
+                        place_ports(trial[index], side, swapped)
+                        if side == "inputs":
+                            place_ports(trial[index], "outputs", sorted(range(len(n["outputs"])), key=lambda i: n["outputs"][i]["y"]))
+                        measured = evaluate(trial, edges, precise=True)
+                        trial_cost = layout_cost(trial, edges)
+                        if no_more_conflicts(measured, checks) and better(measured, trial_cost, checks, cost):
+                            result, checks, cost = trial, measured, trial_cost
+                            order = swapped
+                            improved = True
+        if not improved:
+            break
+    return result
+
+
+def repair_conflicts(nodes, edges, cancelled=lambda: False):
+    """Move endpoints of reported conflicts before perturbing unrelated nodes."""
+    result = copy.deepcopy(nodes)
+    by_id = {n["id"]: i for i,n in enumerate(result)}
+    graph = nx.DiGraph()
+    graph.add_nodes_from(by_id)
+    graph.add_edges_from((e["source"],e["target"]) for e in edges)
+    deadline = time.monotonic()+3
+    for _ in range(3):
+        conflicts = []
+        checks = evaluate(result, edges, precise=True, report=conflicts)
+        if not any(checks.values()):
+            break
+        names = set()
+        for c in conflicts:
+            names.update(c.get("nodes", []))
+            for e in c.get("edges", [c["edge"]] if "edge" in c else []):
+                names.update((e["source"],e["target"]))
+        accepted = False
+        for name in sorted(names, key=lambda n:(graph.degree(n),n)):
+            if not result[by_id[name]].get("selected"):
+                continue
+            branch = {name}
+            pending = [name]
+            while pending:
+                for child in graph.successors(pending.pop()):
+                    if child not in branch and graph.in_degree(child) == 1 and result[by_id[child]].get("selected"):
+                        branch.add(child)
+                        pending.append(child)
+            for group in (branch, {name}) if len(branch)>1 else (branch,):
+                for step in (16,32,64,128,256):
+                    for axis,direction in ((1,-1),(1,1),(0,-1),(0,1)):
+                        if cancelled() or time.monotonic() >= deadline:
+                            return result
+                        trial = copy.deepcopy(result)
+                        for item in group:
+                            trial[by_id[item]]["pos"][axis] += step*direction
+                        measured = evaluate(trial,edges,precise=True)
+                        if no_more_conflicts(measured,checks) and conflict_quality(measured)<conflict_quality(checks):
+                            result = trial
+                            accepted = True
+                            break
+                    if accepted:
+                        break
+                if accepted:
+                    break
+            if accepted:
+                break
+        if not accepted:
+            break
+    return result
+
+
+def layered_seed(original, directed, ranks, width, height, centre, rng, edges=(), dense=False):
     """Barycentric sweeps include long-edge placeholders, but never add canvas nodes."""
     expanded = nx.DiGraph()
     expanded.add_nodes_from(directed)
@@ -232,22 +349,63 @@ def layered_seed(original, directed, ranks, width, height, centre, rng, edges=()
             layers[rank].sort(key=barycentre)
             y.update({n: i-(len(layers[rank])-1)/2 for i,n in enumerate(layers[rank])})
     by_id = {n["id"]: n for n in original}
+    ypos = {n: y[n]*height for n in directed}
+    if dense:
+        # Pack visible boxes using each node's own height, including title bars.
+        # Dummy lanes reserve room for long edges, not the tallest node's height.
+        lane_height = {n: by_id[n]["size"][1]+by_id[n].get("titleHeight",30) if n in by_id else 48
+                       for layer in layers.values() for n in layer}
+        centres = {}
+        port_offsets = {}
+        for n in directed:
+            half = (by_id[n]["size"][1]-by_id[n].get("titleHeight",30))/2
+            for side in ("inputs","outputs"):
+                port_offsets[n,side] = [slot["y"]-half for slot in by_id[n][side]]
+        def peer_centre(n, p, forward):
+            a,b = (p,n) if forward else (n,p)
+            links = [e for e in edges if e["source"]==a and e["target"]==b]
+            if links:
+                delta = float(np.median([port_offsets[a,"outputs"][e["output"]]-port_offsets[b,"inputs"][e["input"]] for e in links]))
+                return centres[p]+(delta if forward else -delta)
+            # A dummy lane follows the socket height of its real endpoint.
+            out = port_offsets.get((a,"outputs"),[0]) or [0]
+            ins = port_offsets.get((b,"inputs"),[0]) or [0]
+            delta = float(np.median(out)-np.median(ins))
+            return centres[p]+(delta if forward else -delta)
+        for layer in layers.values():
+            top = -(sum(lane_height[n] for n in layer)+32*(len(layer)-1))/2
+            for n in layer:
+                centres[n] = top+lane_height[n]/2
+                top += lane_height[n]+32
+        for sweep in range(4):
+            for rank in sorted(layers, reverse=sweep % 2 == 1):
+                layer = layers[rank]
+                wanted = []
+                for n in layer:
+                    peers = list(expanded.predecessors(n) if sweep % 2 == 0 else expanded.successors(n))
+                    wanted.append(float(np.median([peer_centre(n,p,sweep % 2 == 0) for p in peers])) if peers else centres[n])
+                packed = []
+                for i,n in enumerate(layer):
+                    packed.append(max(wanted[i], packed[-1]+(lane_height[layer[i-1]]+lane_height[n])/2+32) if i else wanted[i])
+                shift = float(np.mean(wanted)-np.mean(packed))
+                centres.update({n: c+shift for n,c in zip(layer,packed)})
+        ypos = {n: centres[n]-(by_id[n]["size"][1]-by_id[n].get("titleHeight",30))/2 for n in directed}
     # Keep boundary dependencies facing forward. Centering a long layered chain
     # on its old bounding box can otherwise put its entrance behind a fixed source.
     column_x = {0: 0}
     for rank in range(1, max(ranks.values())+1):
         previous_width = max((by_id[n]["size"][0] for n in layers[rank-1] if n in by_id), default=40)
-        column_x[rank] = column_x[rank-1]+previous_width+min(160, width*.25)
+        column_x[rank] = column_x[rank-1]+previous_width+(48 if dense else min(160, width*.25))
     origin_x = float(np.mean([n["pos"][0]-column_x[ranks[n["id"]]] for n in original if n.get("selected")]))
     lower, upper, anchors_y = [], [], []
     for e in edges:
         a, b = by_id[e["source"]], by_id[e["target"]]
         if not a.get("selected") and b.get("selected"):
             lower.append(a["pos"][0]+a["size"][0]+100-column_x[ranks[b["id"]]])
-            anchors_y.append(a["pos"][1]-y[b["id"]]*height)
+            anchors_y.append(a["pos"][1]-ypos[b["id"]])
         elif a.get("selected") and not b.get("selected"):
             upper.append(b["pos"][0]-a["size"][0]-100-column_x[ranks[a["id"]]])
-            anchors_y.append(b["pos"][1]-y[a["id"]]*height)
+            anchors_y.append(b["pos"][1]-ypos[a["id"]])
     if lower:
         origin_x = max(origin_x, max(lower))
     if upper and (not lower or max(lower) <= min(upper)):
@@ -256,7 +414,7 @@ def layered_seed(original, directed, ranks, width, height, centre, rng, edges=()
     candidate = copy.deepcopy(original)
     for n in candidate:
         if n.get("selected"):
-            n["pos"] = [origin_x+column_x[ranks[n["id"]]], origin_y+y[n["id"]]*height]
+            n["pos"] = [origin_x+column_x[ranks[n["id"]]], origin_y+ypos[n["id"]]]
     return candidate
 
 
@@ -276,6 +434,19 @@ def layout_cost(nodes, edges):
         dx = b["pos"][0]+pb["x"]-a["pos"][0]-pa["x"]
         dy = b["pos"][1]+pb["y"]-a["pos"][1]-pa["y"]
         total += math.hypot(dx, dy)+3*max(0, -dx)
+        if a.get("selected") and b.get("selected"):
+            centres = [abs((b["pos"][axis]+(b["size"][axis]-(b.get("titleHeight",30) if axis else 0))/2)-
+                           (a["pos"][axis]+(a["size"][axis]-(a.get("titleHeight",30) if axis else 0))/2))
+                       for axis in (0,1)]
+            # Prefer a shared row or column over a slightly shorter diagonal.
+            total += 3*min(centres)
+    chosen = [n for n in nodes if n.get("selected")]
+    if chosen:
+        # Include empty space around disconnected branches and Notes as well.
+        width = max(n["pos"][0]+n["size"][0] for n in chosen)-min(n["pos"][0] for n in chosen)
+        height = max(n["pos"][1]+n["size"][1] for n in chosen)-min(
+            n["pos"][1]-n.get("titleHeight", 30) for n in chosen)
+        total += .25*(width+height)
     return total
 
 
@@ -288,13 +459,137 @@ def no_more_conflicts(checks, previous):
     return all(checks[k] <= previous[k] for k in previous)
 
 
+def tighten_spacing(nodes, edges, cancelled=lambda: False):
+    """Close gaps by translating whole rows/columns, preserving their centres.
+
+    A nearby pair only limits its own cut, not every other gap on the canvas.
+    Try moving either side so fixed external endpoints can retain their anchors.
+    """
+    result = copy.deepcopy(nodes)
+    checks = evaluate(result, edges, precise=True)
+    cost = layout_cost(result, edges)
+    selected = [i for i, n in enumerate(result) if n.get("selected")]
+    by_id = {n["id"]: i for i, n in enumerate(result)}
+    forward = []
+    for e in edges:
+        a, b = by_id[e["source"]], by_id[e["target"]]
+        separation = result[b]["pos"][0]-result[a]["pos"][0]-result[a]["size"][0]
+        if separation >= 0:
+            forward.append((a, b, min(48, separation)))
+    deadline = time.monotonic()+6
+
+    def box(n, axis):
+        return (n["pos"][axis]-(n.get("titleHeight", 30) if axis == 1 else 0),
+                n["pos"][axis]+n["size"][axis])
+
+    for _ in range(3):
+        changed = False
+        for axis, gap in ((0, 48), (1, 32)):
+            # Equal visible centres remain in one group even for unequal sizes.
+            groups = []
+            for i in sorted(selected, key=lambda i: sum(box(result[i], axis))/2):
+                centre = sum(box(result[i], axis))/2
+                if groups and abs(centre-sum(box(result[groups[-1][0]], axis))/2) < 1e-6:
+                    groups[-1].append(i)
+                else:
+                    groups.append([i])
+            for cut in range(1, len(groups)):
+                if cancelled() or time.monotonic() >= deadline:
+                    return result
+                lower = [i for group in groups[:cut] for i in group]
+                upper = [i for group in groups[cut:] for i in group]
+                # Preserve ordering of centre lines, including staggered boxes.
+                distance = (sum(box(result[upper[0]], axis))-sum(box(result[lower[-1]], axis)))/2
+                limit = distance-1
+                for i in lower:
+                    for j in upper:
+                        a, b = box(result[i], 1-axis), box(result[j], 1-axis)
+                        if a[0] <= b[1]+32 and b[0] <= a[1]+32:
+                            limit = min(limit, box(result[j], axis)[0]-box(result[i], axis)[1]-gap)
+                if limit <= 1:
+                    continue
+                for moving, direction in ((upper, -1), (lower, 1)):
+                    # If the full move hits an obstacle or a curved wire, narrow
+                    # the step, then refine the largest verified safe movement.
+                    low, high, amount = 0, limit, limit
+                    accepted = None
+                    for attempt in range(9):
+                        if cancelled() or time.monotonic() >= deadline:
+                            return result
+                        candidate = copy.deepcopy(result)
+                        for i in moving:
+                            candidate[i]["pos"][axis] += direction*amount
+                        new_cost = layout_cost(candidate, edges)
+                        ordered = axis != 0 or all(
+                            candidate[b]["pos"][0]-candidate[a]["pos"][0]-candidate[a]["size"][0] >= gap-1e-6
+                            for a, b, gap in forward)
+                        if ordered and new_cost < cost-1:
+                            measured = evaluate(candidate, edges, precise=True)
+                            valid = no_more_conflicts(measured, checks)
+                        else:
+                            valid = False
+                        if valid:
+                            accepted = candidate, measured, new_cost
+                            low = amount
+                            if attempt == 0:
+                                break
+                        else:
+                            high = amount
+                        if high-low <= 1:
+                            break
+                        amount = (low+high)/2
+                    if accepted is not None:
+                        result, checks, cost = accepted
+                        changed = True
+                        break
+        if not changed:
+            break
+    return result
+
+
+def settle_sources(nodes, edges, cancelled=lambda: False):
+    """Place a short source beside its own consumer rather than a distant inlet."""
+    result = copy.deepcopy(nodes)
+    checks = evaluate(result, edges, precise=True)
+    cost = layout_cost(result, edges)
+    graph = nx.DiGraph()
+    graph.add_nodes_from(n["id"] for n in nodes)
+    graph.add_edges_from((e["source"], e["target"]) for e in edges)
+    by_id = {n["id"]: n for n in result}
+    deadline = time.monotonic()+2
+    for index,n in enumerate(result):
+        if cancelled() or time.monotonic() >= deadline:
+            break
+        if not n.get("selected") or graph.in_degree(n["id"]) or graph.out_degree(n["id"]) != 1:
+            continue
+        target = next(graph.successors(n["id"]))
+        cx = n["pos"][0]+n["size"][0]/2
+        # Keep aligned peers feeding the same consumer, e.g. loop input constants.
+        if any(m["id"]!=n["id"] and graph.has_edge(m["id"],target) and
+               abs(m["pos"][0]+m["size"][0]/2-cx)<1e-6 for m in result):
+            continue
+        x = by_id[target]["pos"][0]-n["size"][0]-48
+        if x <= n["pos"][0]+1:
+            continue
+        for amount in (1,.75,.5,.25):
+            trial = copy.deepcopy(result)
+            trial[index]["pos"][0] += (x-n["pos"][0])*amount
+            measured = evaluate(trial,edges,precise=True)
+            trial_cost = layout_cost(trial,edges)
+            if no_more_conflicts(measured,checks) and trial_cost < cost-1:
+                result,checks,cost = trial,measured,trial_cost
+                by_id = {m["id"]:m for m in result}
+                break
+    return result
+
+
 def compact(nodes, edges, cancelled=lambda: False):
     """Shrink verified layouts, retaining port identity and fixed boundary geometry."""
     result = copy.deepcopy(nodes)
     checks = evaluate(result, edges, precise=True)
     chosen = [n for n in result if n.get("selected")]
-    # Horizontal compression keeps the entrance anchored; vertical compression
-    # preserves the centre. Never increase any existing conflict count.
+    # Coarse compression leaves room for the following alignment pass. The
+    # final grouped pass closes individual gaps without breaking that alignment.
     for axis in (0, 1):
         anchor = min(n["pos"][0] for n in chosen) if axis == 0 else float(np.mean([n["pos"][1] for n in chosen]))
         for _ in range(14):
@@ -472,27 +767,45 @@ def solve(data, seconds=45, progress=None, cancelled=lambda: False):
     height = max(n["size"][1] for n in selected)+100
     centre = np.mean([n["pos"] for n in selected], axis=0)
     trials = 0
+    finalists = [((*conflict_quality(initial), before_cost), copy.deepcopy(original))]
+    zero_since = start if not any(initial.values()) else None
+
+    def retain(candidate, checks):
+        if any(ns == candidate for _,ns in finalists):
+            return
+        finalists.append(((*conflict_quality(checks), layout_cost(candidate, edges)), copy.deepcopy(candidate)))
+        finalists.sort(key=lambda item: item[0])
+        del finalists[3:]
+
     while time.monotonic()-start < seconds:
         if cancelled():
             return {"status": "cancelled", "message": "已取消整理，画布保持原样。"}
         if trials == 0:
             candidate = copy.deepcopy(original)
-        elif trials % 90 == 1:
-            candidate = layered_seed(original, directed, late_ranks if (trials//90) % 2 == 0 else ranks,
-                                     width, height, centre, rng, edges)
+        elif trials < 9 or trials % 45 == 1:
+            variant = trials if trials < 9 else trials//45
+            candidate = layered_seed(original, directed, late_ranks if (variant//2) % 2 == 0 else ranks,
+                                     width, height, centre, rng, edges, dense=variant % 2 == 0)
         else:
             candidate = copy.deepcopy(current)
             choices = [n for n in candidate if n.get("selected")]
+            if current_conflicts and rng.random() < .75:
+                conflict = rng.choice(current_conflicts)
+                ids = set(conflict.get("nodes", []))
+                for e in conflict.get("edges", [conflict["edge"]] if "edge" in conflict else []):
+                    ids.update((e["source"],e["target"]))
+                choices = [n for n in choices if n["id"] in ids] or choices
             n = rng.choice(choices)
             if rng.random() < .25:
                 m = rng.choice(choices)
                 n["pos"][1], m["pos"][1] = m["pos"][1], n["pos"][1]
             else:
                 axis = 0 if rng.random() < .15 else 1
-                step = width*.25 if axis == 0 else height*.25
+                step = (n["size"][axis]+48)*.25
                 n["pos"][axis] += rng.choice([-4,-2,-1,1,2,4])*step
         reorder(candidate, edges)
-        coarse = evaluate(candidate, edges)
+        candidate_conflicts = []
+        coarse = evaluate(candidate, edges, report=candidate_conflicts)
         value = score(coarse)
         candidate_cost = layout_cost(candidate, edges)
         if better(coarse, candidate_cost, best_checks, best_cost) or value == 0:
@@ -500,10 +813,14 @@ def solve(data, seconds=45, progress=None, cancelled=lambda: False):
             if better(actual, candidate_cost, best_checks, best_cost):
                 best, best_checks, best_cost = copy.deepcopy(candidate), actual, candidate_cost
                 best_score = score(actual)
+                retain(candidate, actual)
             if not any(actual.values()):
-                best, best_checks = candidate, actual
-                trials += 1
-                break
+                if zero_since is None:
+                    zero_since = time.monotonic()
+                # A valid first candidate is not necessarily compact or aligned.
+                # Keep comparing early/late ranks and variable-height layouts.
+                if candidate is not best and candidate_cost <= best_cost*1.3:
+                    retain(candidate, actual)
             value = score(actual)
         elapsed = time.monotonic()-start
         if progress and elapsed-last_progress >= .5:
@@ -513,9 +830,14 @@ def solve(data, seconds=45, progress=None, cancelled=lambda: False):
         temperature = max(8, 100*(1-(trials % 90)/90))
         if trials == 0 or trials % 90 == 1 or value < current_score or rng.random() < math.exp(min(0, (current_score-value)/temperature)):
             current, current_score = candidate, value
+            current_conflicts = candidate_conflicts
         if trials % 90 == 0 and trials:
             current, current_score = copy.deepcopy(best), best_score
+            current_conflicts = []
+            evaluate(current, edges, report=current_conflicts)
         trials += 1
+        if zero_since is not None and trials >= 9 and time.monotonic()-zero_since >= min(6, seconds*.8):
+            break
     if cancelled():
         return {"status": "cancelled", "message": "已取消整理，画布保持原样。"}
     # Refine even an imperfect candidate; existing crossings no longer block
@@ -523,18 +845,29 @@ def solve(data, seconds=45, progress=None, cancelled=lambda: False):
     if progress:
         progress({"stage": "compact", "trials": trials, "before": initial, "best": best_checks,
                   "elapsed": round(time.monotonic()-start, 1)})
-    candidate = compact(best, edges, cancelled)
-    compacted = candidate
-    if progress:
-        progress({"stage": "align", "trials": trials, "before": initial,
-                  "best": evaluate(candidate, edges, precise=True), "elapsed": round(time.monotonic()-start, 1)})
-    candidate = align_layout(candidate, edges, cancelled)
+    deadline = time.monotonic()+20
+    refinement_stopped = lambda: cancelled() or time.monotonic() >= deadline
+    refined = []
+    for _, draft in finalists:
+        if refinement_stopped():
+            break
+        candidate = refine_ports(draft, edges, refinement_stopped)
+        candidate = repair_conflicts(candidate, edges, refinement_stopped)
+        candidate = compact(candidate, edges, refinement_stopped)
+        if progress:
+            progress({"stage": "align", "trials": trials, "before": initial,
+                      "best": evaluate(candidate, edges, precise=True), "elapsed": round(time.monotonic()-start, 1)})
+        candidate = align_layout(candidate, edges, refinement_stopped)
+        candidate = refine_ports(candidate, edges, refinement_stopped)
+        candidate = align_layout(candidate, edges, refinement_stopped)
+        # Alignment and port exchanges may open new gaps. Close them together.
+        candidate = tighten_spacing(candidate, edges, refinement_stopped)
+        candidate = settle_sources(candidate, edges, refinement_stopped)
+        refined.append(candidate)
     if cancelled():
         return {"status": "cancelled", "message": "已取消整理，画布保持原样。"}
-    checks = evaluate(candidate, edges, precise=True)
-    if not better(checks, layout_cost(candidate, edges), initial, before_cost):
-        candidate = min((best, compacted), key=lambda ns: (
-            *conflict_quality(evaluate(ns, edges, precise=True)), layout_cost(ns, edges)))
+    candidate = min([best, *refined], key=lambda ns: (
+        *conflict_quality(evaluate(ns, edges, precise=True)), layout_cost(ns, edges)))
     conflicts = []
     checks = evaluate(candidate, edges, precise=True, report=conflicts)
     improved = better(checks, layout_cost(candidate, edges), initial, before_cost)

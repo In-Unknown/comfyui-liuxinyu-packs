@@ -49,6 +49,111 @@ def materialize(data, result):
 
 
 class LayoutTests(unittest.TestCase):
+    def test_parallel_text_outputs_sort_by_target_socket_not_node_top(self):
+        source = node(57,0,0,inputs=4,outputs=4)
+        source.update(size=[400,710],inputTop=0)
+        for i in range(4):
+            source["inputs"][i].update(x=10,y=10+i*164,height=164)
+            source["outputs"][i].update(x=391,y=10+i*164,inputAnchor=i)
+        target = node(63,600,240,inputs=4,selected=False)
+        target["size"] = [202,86]
+        es = [edge(57,63,output=i,input=j) for i,j in [(0,0),(3,1),(1,2),(2,3)]]
+        ns = [source,target]
+        self.assertGreater(layout.evaluate(ns,es,True)["crossings"],0)
+        target_before = copy.deepcopy(target)
+        layout.reorder(ns,es)
+        self.assertEqual(source["outputsOrder"],[0,3,1,2])
+        self.assertEqual(target,target_before)
+        self.assertFalse(any(layout.evaluate(ns,es,True).values()))
+        self.assertEqual(source["size"],[400,710])
+
+    def test_both_parallel_endpoints_do_not_swap_from_stale_positions(self):
+        ns = [node(57,0,0,outputs=4),node(63,400,0,inputs=4)]
+        es = [edge(57,63,output=i,input=j) for i,j in [(0,0),(3,1),(1,2),(2,3)]]
+        layout.reorder(ns,es)
+        self.assertFalse(any(layout.evaluate(ns,es,True).values()))
+        first = copy.deepcopy(ns)
+        layout.reorder(ns,es)
+        self.assertEqual(ns,first)
+
+    def test_dense_seed_uses_each_nodes_height(self):
+        ns = [node(1,0,0),node(2,0,500),node(3,0,1000),node(4,900,0,inputs=3)]
+        ns[3]["size"][1] = 1000
+        es = [edge(i,4,input=i-1) for i in (1,2,3)]
+        graph = layout.nx.DiGraph([(str(i),'4') for i in (1,2,3)])
+        ranks = {'1':0,'2':0,'3':0,'4':1}
+        packed = layout.layered_seed(ns,graph,ranks,350,1100,[450,300],random.Random(0),es,dense=True)
+        ys = sorted(n["pos"][1] for n in packed[:3])
+        self.assertLess(ys[-1]-ys[0],300)
+        self.assertEqual([n["size"] for n in packed],[n["size"] for n in ns])
+
+    def test_search_compares_more_than_first_zero_conflict_candidate(self):
+        data = {"nodes":[node(1,0,0),node(2,900,0)],"edges":[edge(1,2)]}
+        result = layout.solve(data,seconds=1)
+        self.assertGreaterEqual(result['trials'],9)
+        self.assert_plan(data,result)
+
+    def test_saved_main_image_layout_parallel_edges_and_branched_outputs(self):
+        data = json.loads((Path(__file__).with_name('fixtures')/'layout_main_image.json').read_text(encoding='utf-8'))
+        source = next(n for n in data['nodes'] if n['id']=='57')
+        rows = sorted(slot['y'] for slot in source['outputs'])
+        for i,slot in enumerate(source['outputs']):
+            slot['y'] = rows[i]
+        source.pop('outputsOrder',None)
+        before = copy.deepcopy(data)
+        result = layout.solve(data,seconds=12)
+        self.assertEqual(result['status'],'ok',result)
+        self.assertFalse(any(result['checks'].values()),result)
+        rebuilt = copy.deepcopy(data)
+        by_id = {n['id']:n for n in rebuilt['nodes']}
+        for item in result['nodes']:
+            n = by_id[item['id']]
+            n['pos'] = item['pos']
+            for side in ('inputs','outputs'):
+                layout.place_ports(n,side,item[side])
+        self.assertFalse(any(layout.evaluate(rebuilt['nodes'],rebuilt['edges'],True).values()))
+        self.assertEqual(data,before)
+        self.assertEqual([n['size'] for n in rebuilt['nodes']],[n['size'] for n in data['nodes']])
+
+    def test_short_source_can_approach_its_own_consumer(self):
+        ns = [node(1,0,0),node(2,0,600),node(3,500,600),node(4,1000,0)]
+        es = [edge(1,4),edge(2,3),edge(3,4)]
+        result = layout.settle_sources(ns,es)
+        self.assertGreater(result[0]['pos'][0],300)
+        self.assertLessEqual(result[0]['pos'][0],802)
+        self.assertTrue(layout.no_more_conflicts(layout.evaluate(result,es,True),layout.evaluate(ns,es,True)))
+
+    def test_reorder_uses_widget_top_above_reserved_socket_start(self):
+        n = node(1, 0, 0, inputs=2)
+        n.update(startY=28, inputTop=4)
+        n["inputs"][0]["y"] = 42
+        n["inputs"][1].update(y=14, height=24)
+        layout.reorder([n], [])
+        self.assertEqual(n["inputsOrder"], [1, 0])
+        self.assertEqual([s["y"] for s in n["inputs"]], [38, 14])
+
+    def test_reorder_retains_nonuniform_output_rows(self):
+        n = node(1, 0, 0, outputs=3)
+        for slot, y in zip(n["outputs"], [14, 178, 342]):
+            slot["y"] = y
+        targets = [node(i+2, 500, y, selected=False) for i, y in enumerate([200, 0, 100])]
+        layout.reorder([n, *targets], [edge(1, i+2, output=i) for i in range(3)])
+        self.assertEqual(n["outputsOrder"], [1, 2, 0])
+        self.assertEqual([s["y"] for s in n["outputs"]], [342, 14, 178])
+
+    def test_output_rows_follow_reordered_compound_input_heights(self):
+        n = node(1, 0, 0, inputs=3, outputs=3)
+        n.update(inputTop=0, freeHeight=24, size=[400, 400])
+        for i, (height, y) in enumerate([(164, 10), (24, 174), (164, 198)]):
+            n["inputs"][i].update(height=height, y=y)
+            n["outputs"][i].update(y=y, inputAnchor=i)
+        sources = [node(i+2, -500, y, selected=False) for i, y in enumerate([300, 0, 100])]
+        layout.reorder([n, *sources], [edge(i+2, 1, input=i) for i in range(3)])
+        self.assertEqual(n["inputsOrder"], [1, 2, 0])
+        self.assertEqual([s["y"] for s in n["inputs"]], [198, 10, 34])
+        self.assertEqual(sorted(s["y"] for s in n["outputs"]), [10, 34, 198])
+        self.assertEqual(n["size"][1], 400)
+
     def assert_plan(self, data, result):
         self.assertEqual(result["status"], "ok", result)
         rebuilt = materialize(data, result)
@@ -101,10 +206,74 @@ class LayoutTests(unittest.TestCase):
         self.assertNotIn("3",[n["id"] for n in result["nodes"]])
 
     def test_no_improvement_keeps_current_layout(self):
-        data = {"nodes":[node(1,0,0),node(2,400,0)],"edges":[]}
+        data = {"nodes":[node(1,0,0),node(2,161,0)],"edges":[]}
         result = layout.solve(data,seconds=0)
         self.assertEqual(result["status"],"not_improved")
         self.assertNotIn("nodes",result)
+
+    def test_close_pair_does_not_block_other_gaps(self):
+        ns = [node(1,0,0), node(2,170,0), node(3,1600,0), node(4,3000,0)]
+        es = [edge(1,2), edge(2,3), edge(3,4)]
+        original = copy.deepcopy(ns)
+        result = layout.tighten_spacing(ns, es)
+        gaps = [b["pos"][0]-a["pos"][0]-a["size"][0] for a,b in zip(result,result[1:])]
+        self.assertEqual(gaps, [20,48,48])
+        self.assertFalse(any(layout.evaluate(result,es,True).values()))
+        self.assertEqual(ns, original)
+        self.assertEqual([n["size"] for n in result], [n["size"] for n in ns])
+        self.assertEqual(layout.tighten_spacing(result,es), result)
+
+    def test_spacing_preserves_unequal_size_rows_and_columns(self):
+        ns = [node(1,0,0), node(2,900,0), node(3,0,1000), node(4,900,1000)]
+        # A wider/taller node is centred on the same row and column as its peers.
+        ns[3].update(size=[250,180], pos=[850,950])
+        ns[3]["outputs"][0]["x"] = 241
+        es = [edge(1,2),edge(3,4)]
+        result = layout.tighten_spacing(ns,es)
+        cx = lambda n: n["pos"][0]+n["size"][0]/2
+        cy = lambda n: n["pos"][1]+(n["size"][1]-30)/2
+        self.assertEqual(cx(result[0]),cx(result[2]))
+        self.assertEqual(cx(result[1]),cx(result[3]))
+        self.assertEqual(cy(result[0]),cy(result[1]))
+        self.assertEqual(cy(result[2]),cy(result[3]))
+        self.assertLess(cx(result[1])-cx(result[0]),300)
+        self.assertLess(cy(result[2])-cy(result[0]),200)
+        self.assertFalse(any(layout.evaluate(result,es,True).values()))
+
+    def test_spacing_respects_fixed_obstacle_and_external_link(self):
+        ns = [node(1,0,0,selected=False), node(2,400,0), node(3,1800,0),
+              node(4,1000,180,selected=False), node(5,1800,500)]
+        es = [edge(1,2),edge(2,3),edge(3,5)]
+        before = layout.evaluate(ns,es,True)
+        result = layout.tighten_spacing(ns,es)
+        self.assertEqual(result[0],ns[0])
+        self.assertEqual(result[3],ns[3])
+        self.assertTrue(layout.no_more_conflicts(layout.evaluate(result,es,True),before))
+        self.assertLess(layout.layout_cost(result,es),layout.layout_cost(ns,es))
+
+    def test_disconnected_notes_have_compactness_cost(self):
+        ns = [node(1,0,0,inputs=0,outputs=0),node(2,1500,900,inputs=0,outputs=0)]
+        data = {"nodes":ns,"edges":[]}
+        result = layout.solve(data,seconds=0)
+        self.assert_plan(data,result)
+        rebuilt = materialize(data,result)["nodes"]
+        self.assertLess(layout.layout_cost(rebuilt,[]),layout.layout_cost(ns,[])/2)
+        self.assertEqual([n["size"] for n in rebuilt],[n["size"] for n in ns])
+
+    def test_spacing_cancellation_retains_input(self):
+        ns = [node(1,0,0),node(2,1000,0)]
+        self.assertEqual(layout.tighten_spacing(ns,[edge(1,2)],cancelled=lambda:True),ns)
+
+    def test_solve_finishes_with_aligned_compact_chain(self):
+        data = {"nodes":[node(i,i*1000,0) for i in range(5)],
+                "edges":[edge(i,i+1) for i in range(4)]}
+        result = layout.solve(data,seconds=0)
+        self.assert_plan(data,result)
+        ns = materialize(data,result)["nodes"]
+        self.assertLess(max(n["pos"][0]+150 for n in ns)-min(n["pos"][0] for n in ns),1000)
+        self.assertEqual(len({n["pos"][1] for n in ns}),1)
+        for a,b in zip(ns,ns[1:]):
+            self.assertLessEqual(b["pos"][0]-a["pos"][0]-150,49)
 
     def test_parallel_overlap(self):
         p = layout.np.array([(0,0),(100,0)])
@@ -154,7 +323,10 @@ class LayoutTests(unittest.TestCase):
         self.assertEqual(result["status"], "cancelled")
         self.assertEqual(progress[0]["stage"], "topology")
         with patch.object(layout, "compact", side_effect=lambda ns,*a: ns), \
-             patch.object(layout, "align_layout", side_effect=lambda ns,*a: ns):
+             patch.object(layout, "align_layout", side_effect=lambda ns,*a: ns), \
+             patch.object(layout, "tighten_spacing", side_effect=lambda ns,*a: ns), \
+             patch.object(layout, "repair_conflicts", side_effect=lambda ns,*a: ns), \
+             patch.object(layout, "settle_sources", side_effect=lambda ns,*a: ns):
             failure = layout.solve(data,seconds=0)
         self.assertEqual(failure["status"],"not_improved")
         self.assertTrue(failure["conflicts"])

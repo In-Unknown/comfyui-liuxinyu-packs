@@ -129,22 +129,34 @@ function setupBlocks(node) {
     }
   }
 
-  const arrange = node.arrange;
-  node.arrange = function (...args) {
-    const result = arrange.apply(this, args);
+  function alignOutputs(force = false) {
+    // A later wrapper must not overwrite explicitly sorted outputs. PortOrder
+    // requests native anchors before assigning their final visual order.
+    if (!force && Array.isArray(node.properties?.liuxinyu_port_order?.outputs)) return;
     fields.forEach(({ header }, index) => {
-      const output = this.outputs[index];
+      const output = node.outputs[index];
       if (!output) return;
-      const x = this.size[0] - 10;
+      const x = node.size[0] - 10;
       const y = header.y + 10;
       output.pos = [x, y];
       // Drawing, link endpoints and hit testing share this output position.
       if (output.boundingRect) {
-        output.boundingRect[0] = this.pos[0] + x - 10;
-        output.boundingRect[1] = this.pos[1] + y - 10;
+        output.boundingRect[0] = node.pos[0] + x - 10;
+        output.boundingRect[1] = node.pos[1] + y - 10;
         output.boundingRect[2] = output.boundingRect[3] = 20;
       }
     });
+  }
+  const portLayout = node.onPortOrderInputLayout;
+  node.getPortOrderOutputAnchor = index => node.inputs[index];
+  node.onPortOrderInputLayout = function (...args) {
+    portLayout?.apply(this, args);
+    alignOutputs(true);
+  };
+  const arrange = node.arrange;
+  node.arrange = function (...args) {
+    const result = arrange.apply(this, args);
+    alignOutputs();
     return result;
   };
   const configured = node.onConfigure;

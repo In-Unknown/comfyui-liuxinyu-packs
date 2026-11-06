@@ -94,7 +94,10 @@ function harness({ savedAt = 1000, modified = 2000, server = graph('server'), st
     async getUserData(p, options) {
       requests.push({ path: p, options });
       return { ok: !state.failFetch, status: state.failFetch ? 503 : 200,
-        async text() { return state.invalidJSON ? '{broken' : JSON.stringify(state.server); } };
+        async text() {
+          await state.beforeRead?.();
+          return state.invalidJSON ? '{broken' : JSON.stringify(state.server);
+        } };
     },
   };
   const app = {
@@ -494,4 +497,93 @@ test('manual canvas command offers the same file again after cancelling', async 
   h.dialogs[1].close('sync'); await h.flush();
   assert.deepEqual(h.workflow.activeState, h.state.server);
   assert.equal(h.workflow.isModified, false);
+});
+
+test('manual check after saving identical content reports no update without changing canvas or draft', async () => {
+  const h = harness({ modified: 900 }); await h.restore();
+  h.state.server = copy(h.state.canvas);
+  h.workflow.lastModified = h.state.modified = 6000;
+  for (const fn of h.actions.workflow) fn({ name: 'saveWorkflow', args: [h.workflow], after: cb => cb() });
+  const before = JSON.stringify({ workflow: h.workflow, canvas: h.state.canvas, drafts: [...h.payloads] });
+  h.extension.getCanvasMenuItems()[0].callback(); await h.flush();
+  assert.equal(h.dialogs.length, 0);
+  assert.equal(h.loads.length, 0);
+  assert.equal(h.warnings.at(-1).summary, '无需更新');
+  assert.equal(JSON.stringify({ workflow: h.workflow, canvas: h.state.canvas, drafts: [...h.payloads] }), before);
+  assert.ok(h.requests.some(r => r.path && r.options.cache === 'no-store'));
+});
+
+test('manual equality ignores root viewport, object keys and root node serialization order', async () => {
+  const h = harness({ modified: 900 }); await h.restore();
+  h.state.server = { nodes: [{ id: 1, type: 'A' }, { id: 2, type: 'B' }], links: [] };
+  h.state.canvas = { links: [], nodes: [{ type: 'B', id: 2 }, { type: 'A', id: 1 }], extra: { ds: { scale: 2, offset: [3, 4] } } };
+  h.extension.getCanvasMenuItems()[0].callback(); await h.flush();
+  assert.equal(h.dialogs.length, 0);
+  assert.equal(h.warnings.at(-1).summary, '无需更新');
+});
+
+test('manual check can acknowledge identical content with a newer mtime after cancelling automatic prompt', async () => {
+  const h = harness({ server: graph('cached') }); await h.restore();
+  h.dialogs[0].close('keep'); await h.flush();
+  h.extension.getCanvasMenuItems()[0].callback(); await h.flush();
+  assert.equal(h.dialogs.length, 1);
+  assert.equal(h.warnings.at(-1).summary, '无需更新');
+  assert.equal(h.loads.length, 0);
+});
+
+test('manual check uses live canvas and preserves widget, wiring and nested subgraph differences', async () => {
+  const changes = [
+    canvas => { canvas.nodes[0].widgets_values[0] = 'live edit'; },
+    canvas => { canvas.links.push([1, 1, 0, 2, 0, 'STRING']); },
+    canvas => { canvas.definitions = { subgraphs: [{ id: 'sub', nodes: [{ id: 3 }] }] }; },
+  ];
+  for (const change of changes) {
+    const h = harness({ modified: 900, server: graph('cached') }); await h.restore();
+    assert.deepEqual(h.workflow.activeState, h.state.server);
+    change(h.state.canvas);
+    h.extension.getCanvasMenuItems()[0].callback(); await h.flush();
+    assert.equal(h.dialogs.length, 1);
+    assert.match(h.dialogs[0].children[1].textContent, /当前画布与后端文件内容不同/);
+    assert.equal(h.loads.length, 0);
+    assert.equal(h.warnings.length, 0);
+    h.dialogs[0].close('keep'); await h.flush();
+  }
+});
+
+test('manual read failure or invalid workflow never claims equal or changes the canvas', async () => {
+  for (const failure of ['failFetch', 'invalidJSON', 'notWorkflow']) {
+    const h = harness({ modified: 900 }); await h.restore();
+    const before = JSON.stringify({ workflow: h.workflow, canvas: h.state.canvas, drafts: [...h.payloads] });
+    if (failure === 'notWorkflow') h.state.server = {};
+    else h.state[failure] = true;
+    h.extension.getCanvasMenuItems()[0].callback(); await h.flush();
+    assert.equal(h.dialogs.length, 0);
+    assert.equal(h.loads.length, 0);
+    assert.equal(h.warnings.at(-1).severity, 'warn');
+    assert.equal(JSON.stringify({ workflow: h.workflow, canvas: h.state.canvas, drafts: [...h.payloads] }), before);
+  }
+});
+
+test('navigation while manual content read is pending suppresses stale results', async () => {
+  const h = harness({ modified: 900, server: graph('cached') }); await h.restore();
+  h.state.beforeRead = () => {
+    h.extension.beforeLoadGraph();
+    h.workflows.activeWorkflow = { path: 'workflows/other.json', isPersisted: false };
+  };
+  h.extension.getCanvasMenuItems()[0].callback(); await h.flush();
+  assert.equal(h.dialogs.length, 0);
+  assert.equal(h.loads.length, 0);
+  assert.equal(h.warnings.length, 0);
+});
+
+test('manual synchronization rereads content changed after its comparison', async () => {
+  const h = harness({ modified: 900 }); await h.restore();
+  h.extension.getCanvasMenuItems()[0].callback(); await h.flush();
+  assert.equal(h.dialogs.length, 1);
+  h.state.server = graph('changed after manual comparison');
+  h.state.modified = 950;
+  h.dialogs[0].close('sync'); await h.flush();
+  assert.deepEqual(h.workflow.activeState, h.state.server);
+  assert.equal(h.requests.filter(r => r.path).length, 2);
+  assert.equal(h.workflow.lastModified, 950);
 });

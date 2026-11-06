@@ -64,11 +64,16 @@ async function main() {
   connect(source,0,transform,0);await settle();source.outputs[0].type='IMAGE';transform.onConfigure();await settle();
   assert.equal(transform.inputs[0].link,null);assert.equal(transform.inputs[0].type,jsonTypes);
 
-  // Apply the extension to the actual saved subgraphs, preserving every cable.
-  const workflow=JSON.parse(fs.readFileSync(path.resolve(__dirname,
-    '../../../user/default/workflows/Fully Automated E-commerce Workflow/快速设计详情页.json'),'utf8'));
+  // Fixed saved fixtures must not assume the user's live workflow only has
+  // three ARRAY transforms. Each saved output follows its selected result type.
+  const fixtures=[['数组','ARRAY'],['布尔值','BOOLEAN'],['字符串','STRING']].map(([label,type])=>({
+    nodes:[{id:1,type:'Source',outputs:[{name:'array',type:'ARRAY',links:[1]}]},
+      {id:2,type:'LiuxinyuStructuredTransform',inputs:[{name:'sources.data0',type:'ARRAY',link:1}],
+        outputs:[{name:'result',type,links:[]},{name:'ok',type:'BOOLEAN',links:[]},{name:'error',type:'STRING',links:[]}],
+        widgets_values_named:{expression:'data0',result_type:label}}],
+    links:[{id:1,origin_id:1,origin_slot:0,target_id:2,target_slot:0,type:'ARRAY'}],expected:type}));
   let count=0;
-  for(const saved of workflow.definitions.subgraphs){
+  for(const saved of fixtures){
     const targets=saved.nodes.filter(n=>n.type==='LiuxinyuStructuredTransform');
     if(!targets.length)continue;
     const g={links:new Map(saved.links.map(l=>[l.id,structuredClone(l)])),
@@ -79,7 +84,7 @@ async function main() {
       n.disconnectInput=()=>{throw Error('Saved valid connection was disconnected');};
       n.widgets=Object.entries(n.widgets_values_named).map(([name,value])=>({name,value}));
       extension.nodeCreated(n);await settle();
-      assert.equal(n.outputs[0].type,'ARRAY');
+      assert.equal(n.outputs[0].type,saved.expected);
       for(let i=0;i<20;i++){n.onConfigure();await settle();}
       count++;
     }

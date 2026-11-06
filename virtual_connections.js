@@ -1,4 +1,5 @@
 import { app } from "../../scripts/app.js";
+import { preservePortOrder } from "./port_order.js";
 
 const SEND = "LiuxinyuVirtualOutput";
 const RECEIVE = "LiuxinyuVirtualInput";
@@ -147,12 +148,16 @@ function sync(root) {
           if (send && dataInput(send, i)?.link != null) continue;
           if (receivers.some(receive => receive.outputs[i]?.links?.length)) continue;
           if (send) {
-            send.removeInput(send.inputs.indexOf(dataInput(send, i)));
-            for (let j = i + 1; j < count; j++) dataInput(send, j).name = `value${j - 1}`;
+            preservePortOrder(send, () => {
+              send.removeInput(send.inputs.indexOf(dataInput(send, i)));
+              for (let j = i + 1; j < count; j++) dataInput(send, j).name = `value${j - 1}`;
+            });
           }
           for (const receive of receivers) {
-            receive.removeOutput(i);
-            for (let j = i; j < receive.outputs.length; j++) receive.outputs[j].name = `输出 ${j + 1}`;
+            preservePortOrder(receive, () => {
+              receive.removeOutput(i);
+              for (let j = i; j < receive.outputs.length; j++) receive.outputs[j].name = `输出 ${j + 1}`;
+            });
           }
           count--;
           resized = true;
