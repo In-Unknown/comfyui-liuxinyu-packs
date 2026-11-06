@@ -285,10 +285,16 @@ async function request(data, controller, onProgress = () => {}) {
     });
     if (response.status === 404) throw new Error("请重启 ComfyUI 后端加载整理接口，再刷新页面。");
     if (!response.ok) {
-      const result = await response.json();
-      throw new Error(result.message || "整理请求失败。");
+      const body = await response.text();
+      let message;
+      try { message = JSON.parse(body)?.message; } catch { /* Non-JSON server errors are valid diagnostics too. */ }
+      throw new Error(message || `整理请求失败 (${response.status})：${body.trim().slice(0, 500) || response.statusText || "无响应内容"}`);
     }
-    if (!response.headers?.get("Content-Type")?.includes("ndjson")) return await response.json();
+    if (!response.headers?.get("Content-Type")?.includes("ndjson")) {
+      const body = await response.text();
+      try { return JSON.parse(body); }
+      catch { throw new Error(`整理接口返回了无法解析的响应：${body.trim().slice(0, 500) || "无响应内容"}`); }
+    }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let pending = "";
@@ -301,7 +307,9 @@ async function request(data, controller, onProgress = () => {}) {
         pending = lines.pop();
         for (const line of lines) {
           if (!line.trim()) continue;
-          const item = JSON.parse(line);
+          let item;
+          try { item = JSON.parse(line); }
+          catch { throw new Error(`整理接口返回了无法解析的数据行：${line.trim().slice(0, 500)}`); }
           if (item.event === "progress") onProgress(item.data);
           if (item.event === "error") throw new Error(item.data.message);
           if (item.event === "result") result = item.data;

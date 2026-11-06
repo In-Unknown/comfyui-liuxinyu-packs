@@ -39,14 +39,16 @@ export function createBackgroundStore(api, legacy) {
         file = pendingFiles.get(record.blob);
         if (!file) {
           const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, "0")).join("");
-          file = `images/${id}.${record.blob.type === "image/png" ? "png" : "webp"}`;
+          const extension = record.blob.type === "image/png" ? "png" :
+            record.blob.type === "image/gif" || record.animated ? "gif" : "webp";
+          file = `images/${id}.${extension}`;
           pendingFiles.set(record.blob, file);
         }
         await write(`${DIRECTORY}/${file}`, { method: "POST", body: record.blob }, `图片“${record.name}”保存`);
         uploaded.set(record.blob, file);
         pendingFiles.delete(record.blob);
       }
-      records.push({ name: record.name, ratio: record.ratio, file });
+      records.push({ name: record.name, ratio: record.ratio, file, animated: Boolean(record.animated) });
     }
     // Commit the manifest only after every referenced image exists on disk.
     await write(CONFIG, { method: "POST", headers: { "Content-Type": "application/json" },
@@ -63,10 +65,10 @@ export function createBackgroundStore(api, legacy) {
     if (value.version !== 1 || !Array.isArray(value.records) || !value.settings || typeof value.settings !== "object") throw new Error("背景配置格式无效");
     const records = [];
     for (const record of value.records) {
-      if (!/^images\/[a-f0-9]{32}\.(webp|png)$/.test(record.file) || !(record.ratio > 0) || !Number.isFinite(record.ratio)) throw new Error("背景图片记录无效");
+      if (!/^images\/[a-f0-9]{32}\.(webp|png|gif)$/.test(record.file) || !(record.ratio > 0) || !Number.isFinite(record.ratio)) throw new Error("背景图片记录无效");
       const image = check(await request(`${DIRECTORY}/${record.file}`), `图片“${record.name}”读取`);
       const blob = await image.blob(); uploaded.set(blob, record.file);
-      records.push({ name: String(record.name), ratio: record.ratio, blob });
+      records.push({ name: String(record.name), ratio: record.ratio, blob, animated: /\.gif$/i.test(record.file) });
     }
     return { settings: value.settings, records };
   };

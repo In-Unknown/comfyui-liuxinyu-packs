@@ -4,9 +4,10 @@ import { registerMenuItem } from "./menu_source.js";
 import { mosaicLayout, createHierarchy, positionSeed, regionFamily, regionChildren } from "./canvas_background_layout.js";
 import { createBackgroundStore } from "./canvas_background_storage.js";
 
-const defaults = { enabled: true, size: 1800, opacity: 0.35, groupFade: 0.65, gridOpacity: 1, seed: 1, levels: 2 };
+const defaults = { enabled: true, size: 1800, opacity: 0.35, groupFade: 0.65, gridOpacity: 1, gifSpeed: 1, seed: 1, levels: 2 };
 let settings = { ...defaults };
 let pictures = [], records = [], texture = null, panel = null, busy = false;
+let animationFrame = null, animationTime = 0, animationSignature = "";
 let saveChain = Promise.resolve();
 let saveRevision = 0;
 let panelPosition = null;
@@ -96,7 +97,7 @@ function buildTexture(images, files, prepared) {
   const unit = settings.size * 4 ** Math.min(hierarchy.depth, 3);
   const sample = surface(1, 1), sampleContext = sample.getContext("2d");
   const averages = images.map(image => {
-    sampleContext.clearRect(0, 0, 1, 1); sampleContext.drawImage(image, 0, 0, 1, 1);
+    sampleContext.clearRect(0, 0, 1, 1); sampleContext.drawImage(drawable(image), 0, 0, 1, 1);
     return sampleContext.getImageData(0, 0, 1, 1).data;
   });
   const mean = [0, 0, 0, 0];
@@ -132,6 +133,53 @@ async function rebuild() {
 }
 
 function redraw() { app.canvas?.setDirty(true, true); }
+
+function drawable(image) {
+  return image?.frames ? image.frames[image.frame].image : image;
+}
+
+function isGifRecord(record) {
+  return Boolean(record?.animated || record?.blob?.type === "image/gif" || /\.gif$/i.test(record?.file || ""));
+}
+
+function hasGif() { return records.some(isGifRecord); }
+
+function hasAnimation() { return pictures.some(image => image?.frames?.length > 1); }
+
+function stopAnimation() {
+  if (animationFrame !== null) cancelAnimationFrame(animationFrame);
+  animationFrame = null; animationTime = 0;
+}
+
+function animate(timestamp) {
+  animationFrame = null;
+  if (!hasAnimation() || settings.gifSpeed <= 0) return;
+  const elapsed = Math.min(100, animationTime ? timestamp - animationTime : 0);
+  animationTime = timestamp;
+  let changed = false;
+  for (const image of pictures) {
+    if (!image?.frames?.length || image.frames.length < 2) continue;
+    image.elapsed += elapsed * settings.gifSpeed;
+    while (image.elapsed >= image.frames[image.frame].duration) {
+      image.elapsed -= image.frames[image.frame].duration;
+      image.frame = (image.frame + 1) % image.frames.length;
+      changed = true;
+    }
+  }
+  if (changed) {
+    if (texture) { texture.thumbnails.clear(); texture.thumbnailPixels = 0; }
+    redraw();
+  }
+  animationFrame = requestAnimationFrame(animate);
+}
+
+function syncAnimation() {
+  const signature = `${hasAnimation()}:${settings.gifSpeed}`;
+  if (signature === animationSignature && (animationFrame !== null || !hasAnimation() || settings.gifSpeed <= 0)) return;
+  animationSignature = signature;
+  stopAnimation();
+  if (hasAnimation() && settings.gifSpeed > 0) animationFrame = requestAnimationFrame(animate);
+}
 
 function intersects(x, y, width, height, area) {
   return !area || (x + width > area[0] && y + height > area[1] && x < area[0] + area[2] && y < area[1] + area[3]);
@@ -186,7 +234,7 @@ function drawRegion(ctx, background, family, seed, x, y, width, height, scale, a
       const tw = tile.width / background.layout.width * width, th = tile.height * height;
       if (intersects(tx, ty, tw, th, area)) {
         const bounds = rasterBounds(matrix, tx, ty, tw, th);
-        if (bounds[2] > 0 && bounds[3] > 0) ctx.drawImage(background.images[tile.image], ...bounds);
+        if (bounds[2] > 0 && bounds[3] > 0) ctx.drawImage(drawable(background.images[tile.image]), ...bounds);
       }
     }
   }
@@ -287,14 +335,55 @@ async function decode(blob) {
   } finally { URL.revokeObjectURL(url); }
 }
 
+async function decodeGif(blob) {
+  if (typeof ImageDecoder === "undefined") return null;
+  const decoder = new ImageDecoder({ data: await blob.arrayBuffer(), type: "image/gif" });
+  await decoder.tracks.ready;
+  const track = decoder.tracks.selectedTrack;
+  const frames = [];
+  try {
+    for (let index = 0; index < track.frameCount; index++) {
+      const result = await decoder.decode({ frameIndex: index });
+      const frame = result.image;
+      const scale = Math.min(1, 1024 / Math.max(frame.displayWidth, frame.displayHeight));
+      const width = Math.max(1, Math.round(frame.displayWidth * scale));
+      const height = Math.max(1, Math.round(frame.displayHeight * scale));
+      const canvas = surface(width, height);
+      canvas.getContext("2d").drawImage(frame, 0, 0, width, height);
+      const duration = Math.max(10, Math.round((frame.duration || 100000) / 1000));
+      frame.close();
+      frames.push({ image: canvas, duration });
+    }
+  } finally { decoder.close?.(); }
+  return frames.length ? { frames, frame: 0, elapsed: 0 } : null;
+}
+
+async function decodeRecord(record) {
+  if (isGifRecord(record)) {
+    try {
+      const animation = await decodeGif(record.blob);
+      if (animation) return animation;
+    } catch { /* Fall back to the browser's static image decoder. */ }
+  }
+  return decode(record.blob);
+}
+
 async function prepare(file) {
+  if (file.type === "image/gif" || /\.gif$/i.test(file.name)) {
+    let animation = null;
+    try { animation = await decodeGif(file); } catch { /* Fall back to the browser's static image decoder. */ }
+    if (animation) {
+      const image = animation.frames[0].image;
+      return { record: { name: file.name, blob: file, ratio: image.width / image.height, animated: true }, image: animation };
+    }
+  }
   const image = await decode(file);
   const scale = Math.min(1, 1024 / Math.max(image.width, image.height));
   const canvas = surface(Math.max(1, Math.round(image.width * scale)), Math.max(1, Math.round(image.height * scale)));
   canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
   const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/webp", 0.9));
   if (!blob) throw new Error(`无法读取图片：${file.name}`);
-  return { record: { name: file.name, blob, ratio: image.width / image.height }, image: canvas };
+  return { record: { name: file.name, blob, ratio: image.width / image.height, animated: false }, image: canvas };
 }
 
 function nativeGrid(canvas, source) {
@@ -456,25 +545,27 @@ function openPanel() {
   enabled.onchange = () => { settings.enabled = enabled.checked; redraw(); commitAdjustment(); };
   enabledLabel.append(enabled); body.append(enabledLabel);
 
-  function rangeControl(key, label, min, max, step, factor, logarithmic = false) {
+  function rangeControl(key, label, min, max, step, factor, logarithmic = false, piecewise = false, visibleWhen = () => true) {
     const isLevels = key === "levels";
     const block = element("div", "liuxinyu-bg-control"), title = element("label", "", label);
     const slider = element("div", "liuxinyu-bg-slider"), ticks = element("div", "liuxinyu-bg-ticks");
     const editor = element("div", "liuxinyu-bg-slider-editor"), entry = element("div", "liuxinyu-bg-slider-entry");
     const range = track(element("input")), number = track(element("input"));
     const unit = isLevels ? "层" : "%";
-    const anchors = logarithmic ? [50, 100, 200] : [];
+    const anchors = piecewise ? [100] : logarithmic ? [50, 100, 200] : [];
     let hoverTimer = null, pressed = false, overThumb = false, wheel = 0;
     range.type = "range"; range.name = key; range.id = `liuxinyu-bg-${key}`;
-    range.min = logarithmic ? 0 : min; range.max = logarithmic ? 1000 : max; range.step = logarithmic ? 1 : step;
+    range.min = logarithmic || piecewise ? 0 : min; range.max = logarithmic || piecewise ? 1000 : max; range.step = logarithmic || piecewise ? 1 : step;
     number.type = "number"; number.name = `${key}-value`; number.min = min; number.max = max; number.step = logarithmic ? 0.1 : 1;
     title.htmlFor = range.id; number.setAttribute("aria-label", `${label}，${isLevels ? "层" : "百分比"}`);
     editor.id = `${range.id}-editor`; editor.hidden = true;
     editor.setAttribute("role", "dialog"); editor.setAttribute("aria-label", label);
     range.setAttribute("aria-controls", editor.id); range.setAttribute("aria-haspopup", "dialog"); range.setAttribute("aria-expanded", "false");
     ticks.setAttribute("aria-hidden", "true");
-    const toSlider = value => logarithmic ? Math.log(value / min) / Math.log(max / min) * 1000 : value;
-    const fromSlider = value => logarithmic ? min * (max / min) ** (value / 1000) : value;
+    const toSlider = value => logarithmic ? Math.log(value / min) / Math.log(max / min) * 1000 :
+      piecewise ? (value <= 100 ? value * 5 : 500 + (value - 100) * 2.5) : value;
+    const fromSlider = value => logarithmic ? min * (max / min) ** (value / 1000) :
+      piecewise ? (value <= 500 ? value / 5 : 100 + (value - 500) / 2.5) : value;
     const fraction = value => (toSlider(value) - Number(range.min)) / (Number(range.max) - Number(range.min));
     const placeEditor = () => {
       const width = range.getBoundingClientRect().width;
@@ -538,6 +629,7 @@ function openPanel() {
       if (!Number.isFinite(value) || value < min || value > max || (isLevels && !Number.isInteger(value))) return false;
       const previous = settings[key]; settings[key] = value / factor;
       if (key === "size" && texture) { texture.width *= settings.size / previous; texture.height *= settings.size / previous; }
+      if (key === "gifSpeed") syncAnimation();
       redraw(); sync(); return true;
     };
     range.oninput = () => {
@@ -599,17 +691,26 @@ function openPanel() {
     if (anchors.length) slider.append(ticks);
     slider.append(range, editor); block.append(title, slider);
     body.append(block); update();
+    const syncVisibility = () => {
+      block.hidden = !visibleWhen();
+      if (block.hidden) hideEditor();
+    };
+    syncVisibility();
+    return { syncVisibility };
   }
   rangeControl("size", "图片缩放", 10, 500, 1, 100 / defaults.size, true);
   rangeControl("opacity", "图片不透明度", 0, 100, 1, 100);
   rangeControl("groupFade", "组内背景淡化", 0, 100, 1, 100);
   rangeControl("gridOpacity", "网格不透明度", 0, 100, 1, 100);
   rangeControl("levels", "嵌套层数", 0, 10, 1, 1);
+  const gifSpeedControl = rangeControl("gifSpeed", "GIF 播放速度", 0, 300, 1, 100, false, true, hasGif);
 
   const levelStatus = element("p", "liuxinyu-bg-level-status");
   const sync = () => {
     controls.forEach(([control, unavailable]) => { control.disabled = busy || unavailable(); });
     if (busy) hideSliderEditors();
+    gifSpeedControl.syncVisibility();
+    syncAnimation();
     levelStatus.hidden = !texture?.hierarchy || texture.hierarchy.depth === settings.levels;
     levelStatus.textContent = levelStatus.hidden ? "" : `实际嵌套：${texture.hierarchy.depth} 层`;
     grid.querySelectorAll("button").forEach(node => { node.disabled = busy; });
@@ -677,6 +778,7 @@ function openPanel() {
     try {
       const prepared = await prepareTexture(images, files);
       pictures = images; records = files; texture = prepared;
+      syncAnimation();
       redraw(); renderImages(); commitAdjustment(); position();
     } finally { busy = false; sync(); }
   }
@@ -744,12 +846,14 @@ app.registerExtension({
       const saved = await storage();
       if (saved) {
         const images = [];
-        for (const record of saved.records) images.push(await decode(record.blob));
+        for (const record of saved.records) images.push(await decodeRecord(record));
         settings = Object.fromEntries(Object.keys(defaults).map(key => [key, saved.settings[key] ?? defaults[key]]));
         settings.levels = Math.max(0, Math.min(10, Math.floor(Number(settings.levels) || 0)));
         settings.groupFade = Number.isFinite(Number(settings.groupFade)) ? Math.max(0, Math.min(1, Number(settings.groupFade))) : defaults.groupFade;
+        settings.gifSpeed = Number.isFinite(Number(settings.gifSpeed)) ? Math.max(0, Math.min(3, Number(settings.gifSpeed))) : defaults.gifSpeed;
         records = saved.records; pictures = images;
         await rebuild();
+        syncAnimation();
       }
       saveStatus = "";
       if (saved?.needsMigration) persist();
