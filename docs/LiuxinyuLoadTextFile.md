@@ -41,6 +41,7 @@
 
 ## 常见问题
 
+- 要把字符串保存为文件时，使用[保存文本到文本文件](LiuxinyuSaveTextFile.md)，可按 UTF-8 写入任意后缀的文件。
 - 想按行拆开内容时，把“文本内容”接到[切分字符串为数组](LiuxinyuStringArraySplit.md)，分隔符传入实际换行。
 - 文件是 JSON 时，可接[字符串转为JS对象](LiuxinyuStringToJSObject.md)解析成对象再读取字段。
 

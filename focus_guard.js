@@ -24,9 +24,11 @@ function setup() {
     documents.add(document);
     document.addEventListener("blur", event => {
       // Native property editors and legacy search register blur => this.focus().
-      // Stop that target handler only when focus has left the page; normal
-      // in-page editing and all unrelated inputs retain their original events.
-      if (event.target?.matches?.(".graphdialog input.value") && inactive(document)) {
+      // During window deactivation hasFocus() can still describe the old state.
+      // A null relatedTarget means there is no known in-page focus destination;
+      // never pull focus back synchronously in that transition (including chrome).
+      if (event.target?.matches?.(".graphdialog input.value") &&
+          (event.relatedTarget == null || inactive(document))) {
         event.stopImmediatePropagation();
       }
     }, true);

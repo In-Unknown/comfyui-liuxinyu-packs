@@ -100,6 +100,27 @@ class Node {
   setSize(size) { this.size=size; this.arrange(); }
 }
 
+// Old automatic layout wrote an order even for a primitive with one socket per
+// side. That record must not move its value widget beside the output label.
+{
+  const primitive=new Node();
+  primitive.inputs=[new Slot('value',{widget:{name:'value'}})];
+  primitive.outputs=[new Slot('INT',{links:[20]})];
+  primitive.widgets=[{name:'value',value:1,width:260},{name:'control_after_generate',value:'fixed',width:260}];
+  primitive.size=[270,82];
+  primitive.arrange();
+  const native=primitive.widgets.map(w=>({y:w.y,width:w.width,value:w.value}));
+  const output=primitive.getOutputPos(0);
+  primitive.properties[PROPERTY]={version:1,
+    inputs:entries(primitive,'inputs').map(e=>e.key),outputs:entries(primitive,'outputs').map(e=>e.key)};
+  extension.nodeCreated(primitive);
+  for(let i=0;i<10;i++)primitive.arrange();
+  assert.deepEqual(primitive.widgets.map(w=>({y:w.y,width:w.width,value:w.value})),native);
+  assert.deepEqual(primitive.getOutputPos(0),output);
+  assert.equal(primitive.outputs[0].links[0],20);
+  assert.equal(primitive.size[1],82);
+}
+
 // Optional integration: use the installed frontend's actual coordinate and
 // hit-test functions. No browser or bundled frontend modifications are needed.
 if (process.argv[2]) {
@@ -488,6 +509,7 @@ assert.equal(resetHost.outputs[0].pos,undefined,'Reset restores native positions
 console.log('PASS: boundary arrows without selection, bidirectional shared order, nested/new instances, stable IDs, save/undo, grey socket and unchanged connections');
 
 const portExtension=extension;
+context.registerMenuItem=()=>{}; // Menu registration is covered by test_menu_order.cjs.
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../graph_layout.js'),'utf8')
   .replace(/^import .*;\r?$/gm,'').replace('const PROPERTY = "liuxinyu_port_order";','')+
   '\nglobalThis.layoutHelpers = {checkpoint,apply,restore};',context);
@@ -571,7 +593,7 @@ if(process.argv[2]) {
   console.log('PASS: sorted flexible textarea retains saved height before native slot caches are rebuilt');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 (async()=>{
-  for(const first of ['port','collapse'])for(const type of ['LiuxinyuTextFromTemplate','llm_remote_reply','LLMHarnessBooleanReturn','subgraph']) {
+  for(const first of ['port','collapse'])for(const type of ['LiuxinyuTextFromTemplate','LiuxinyuSaveTextFile','llm_remote_reply','LLMHarnessBooleanReturn','subgraph']) {
     const n=new MultilineNode(type);
     if(type==='subgraph'){
       n.subgraph=subgraph();n.subgraph.inputs=n.inputs.map((s,i)=>new BoundarySlot('shared-'+i,s.name,true));
@@ -682,7 +704,7 @@ vm.runInContext('(function(){'+fs.readFileSync(path.join(__dirname,'../folder_pi
   ';globalThis.pickerTesting={setupImageBatchPicker};})()',context);
 const pickerExtension=extension;extension=portExtension;
 (async()=>{
-  const cases=[['SaveImageToAbsolutePath','folder'],['LoadDirectory','path'],['MatchPath','directory'],['LiuxinyuLoadTextFile','path']];
+  const cases=[['SaveImageToAbsolutePath','folder'],['LiuxinyuSaveTextFile','folder'],['LoadDirectory','path'],['MatchPath','directory'],['LiuxinyuLoadTextFile','path']];
   for(const [type,name] of cases)for(const sequence of [[pickerExtension,portExtension],[portExtension,pickerExtension]]){
     const n=new BlockNode();n.comfyClass=type;n.outputs=[];
     n.inputs=[new Slot('images'),...[name,'filename','overwrite'].map(name=>new Slot(name,{widget:{name}}))];

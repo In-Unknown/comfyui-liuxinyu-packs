@@ -1,0 +1,62 @@
+.liuxinyu-node-find {
+  position: fixed;
+  top: 80px;
+  right: 24px;
+  z-index: 10000;
+  box-sizing: border-box;
+  width: min(420px, calc(100vw - 24px));
+  max-height: calc(100vh - 100px);
+  overflow: auto;
+  padding: 14px;
+  border: 1px solid var(--border-color, #636874);
+  border-radius: 8px;
+  background: var(--comfy-menu-bg, #25272b);
+  color: var(--fg-color, #eee);
+  box-shadow: 0 6px 24px #0005;
+  font: 13px/1.5 sans-serif;
+}
+.liuxinyu-node-find header, .liuxinyu-node-find form {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.liuxinyu-node-find header small { opacity: .65; }
+.liuxinyu-node-find header button { margin-left: auto; }
+.liuxinyu-node-find input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px;
+  color: inherit;
+  background: var(--comfy-input-bg, #17191c);
+  border: none;
+  border-radius: 4px;
+}
+.liuxinyu-node-find button {
+  padding: 6px 10px;
+  color: inherit;
+  background: var(--comfy-input-bg, #31343a);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.liuxinyu-node-find :is(input, button) { outline: none; box-shadow: none; }
+.liuxinyu-node-find button:focus-visible,
+.liuxinyu-node-find button:hover { background: var(--comfy-input-bg-hover, #414957); }
+.liuxinyu-node-find header button,
+.liuxinyu-node-find header button:hover,
+.liuxinyu-node-find header button:focus-visible { background: transparent; }
+.liuxinyu-node-find form button,
+.liuxinyu-node-find form button:focus-visible {
+  background: transparent;
+  transform: scale(1);
+  transition: transform 120ms ease-out;
+}
+.liuxinyu-node-find form button:hover { background: var(--comfy-input-bg, #31343a); }
+.liuxinyu-node-find form button:active { transform: scale(0.94); }
+.liuxinyu-node-find-status { opacity: .8; margin-bottom: 8px; }
+.liuxinyu-node-find-status:empty { display: none; }
+.liuxinyu-node-find-results { display: grid; gap: 7px; }
+.liuxinyu-node-find-result { width: 100%; text-align: left; overflow-wrap: anywhere; }
+.liuxinyu-node-find-result strong, .liuxinyu-node-find-result small { display: block; }
+.liuxinyu-node-find-result small { margin-top: 3px; opacity: .7; }

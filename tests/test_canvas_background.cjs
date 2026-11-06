@@ -131,7 +131,7 @@ const schedule=(fn,delay)=>{const id=++timerId;timers.set(id,{fn,at:clock+delay}
 const advance=ms=>{clock+=ms;for(const [id,timer] of [...timers]) if(timer.at<=clock){timers.delete(id);timer.fn();}};
 const mockWindow={devicePixelRatio:2,innerWidth:1280,innerHeight:800,
   addEventListener(type,fn){windowListeners.set(type,fn);},removeEventListener(type){windowListeners.delete(type);}};
-const mockDocument={body:{append(){}},head:{append(){}},hasFocus:()=>true,
+const mockDocument={body:{append(){}},head:{append(){}},focused:true,hasFocus(){return this.focused;},
   getElementById(id){return elements.find(e=>e.id===id&&!e.removed);},
   querySelectorAll(selector){return elements.filter(e=>{
     for(let node=e;node;node=node.parent) if(node.removed) return false;
@@ -214,7 +214,11 @@ const indexedDB={open(){
 const scope=vm.createContext({app,api,crypto:require('node:crypto').webcrypto,document:mockDocument,window:mockWindow,Image:MockImage,indexedDB,URL,AbortController,
   setTimeout:schedule,clearTimeout:id=>timers.delete(id),
   Uint8ClampedArray,DOMMatrix:class {scale(...args){this.scaleValues=args;return this;}},
-  sourceMenuItems:items=>items.map(item=>({...item,className:'liuxinyu-menu-source'})),...math});
+  ...math});
+for (const file of ['menu_order.js','menu_source.js']) {
+  vm.runInContext(fs.readFileSync(path.join(root,file),'utf8').replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,''),scope);
+}
+const menuExtension=extension;
 let source=fs.readFileSync(path.join(root,'canvas_background.js'),'utf8').replace(/^import .*;\r?\n/gm,'').replace(/export /g,'');
 vm.runInContext(fs.readFileSync(path.join(root,'canvas_background_storage.js'),'utf8').replace(/export /g,''),scope);
 vm.runInContext(source+';globalThis.background={gridProfile,drawVectorGrid,drawPictures,buildTexture,install,panelBounds,settings,storage,persist,current(){return {texture,settings,records,pictures,saveStatus};},flush(){return saveChain;},configure(value){texture=value;pictures=value.images;records=pictures.map((image,i)=>({name:`image${i}.png`,blob:{width:image.width,height:image.height},ratio:image.width/image.height}));}};',scope);
@@ -351,7 +355,7 @@ const failureCanvas={...canvas,drawBackCanvas(){throw Error('native failure');}}
 background.install(failureCanvas);
 assert.throws(()=>failureCanvas.drawBackCanvas(),/native failure/);
 assert.equal(failureCanvas.background_image,'grid');assert.equal(failureCanvas.clear_background_color,'#222');
-const menu=extension.getCanvasMenuItems();assert.equal(menu[0].className,'liuxinyu-menu-source');assert.match(menu[0].content,/画布背景/);
+const menu=menuExtension.getCanvasMenuItems();assert.equal(menu[0].className,'liuxinyu-menu-source');assert.match(menu[0].content,/画布背景/);
 assert.equal(notices.length,0);
 
 (async()=>{
@@ -482,6 +486,14 @@ assert.equal(notices.length,0);
   seed.value='0';await seed.onchange();assert.equal(background.current().settings.seed,0);
   seed.value='123456';await seed.onchange();
   range.onpointermove(thumb());advance(1000);windowListeners.get('blur')();assert.equal(editor.hidden,true);
+  size.focus();range.parent.onpointerleave({relatedTarget:null});
+  assert.equal(mockDocument.activeElement,size,'Leaving the browser must not request range focus even before hasFocus updates');
+  mockDocument.focused=false;range.parent.onpointerleave({relatedTarget:dialog});
+  assert.equal(mockDocument.activeElement,size,'An inactive window must not be reactivated by pointer leave');
+  mockDocument.focused=true;mockDocument.hidden=true;range.parent.onpointerleave({relatedTarget:dialog});
+  assert.equal(mockDocument.activeElement,size,'A hidden page must not request range focus');
+  mockDocument.hidden=false;range.parent.onpointerleave({relatedTarget:dialog});
+  assert.equal(mockDocument.activeElement,range,'Normal in-page pointer leave can restore slider focus');
   let stopped=0;dialog.listeners.wheel({stopPropagation(){stopped++;}});assert.equal(stopped,1);
   range.onpointermove(thumb());advance(1000);assert.equal(editor.hidden,false);
   action('收起').click();assert.equal(mockDocument.getElementById('liuxinyu-bg-body').hidden,true);assert.equal(editor.hidden,true);

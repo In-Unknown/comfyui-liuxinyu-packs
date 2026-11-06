@@ -124,7 +124,9 @@ function ordered(node, side, order = preference(node, side)) {
 
 function active(node, side) {
   return !LiteGraph.vueNodesMode && !node.flags?.collapsed &&
-    node[side]?.length > 0 &&
+    // A one-slot preference from older automatic layouts is not a permutation.
+    // Reflowing it moves native widgets into the output row and narrows them.
+    node[side]?.length > 1 &&
     Array.isArray(preference(node, side));
 }
 

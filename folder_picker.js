@@ -100,7 +100,7 @@ app.registerExtension({
   },
 
   async nodeCreated(node) {
-    if (node.comfyClass === SAVE_IMAGE_NODE) {
+    if (node.comfyClass === SAVE_IMAGE_NODE || node.comfyClass === "LiuxinyuSaveTextFile") {
       setupFolderPicker(node);
     } else if (node.comfyClass === "LoadImageBatchFromPath") {
       setupImageBatchPicker(node);

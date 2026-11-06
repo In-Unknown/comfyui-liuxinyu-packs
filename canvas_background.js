@@ -1,6 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { sourceMenuItems } from "./menu_source.js";
+import { registerMenuItem } from "./menu_source.js";
 import { mosaicLayout, createHierarchy, positionSeed, regionFamily, regionChildren } from "./canvas_background_layout.js";
 import { createBackgroundStore } from "./canvas_background_storage.js";
 
@@ -137,10 +137,20 @@ function intersects(x, y, width, height, area) {
   return !area || (x + width > area[0] && y + height > area[1] && x < area[0] + area[2] && y < area[1] + area[3]);
 }
 
-function drawRegion(ctx, background, family, seed, x, y, width, height, scale, area, cache) {
+function rasterBounds(matrix, x, y, width, height) {
+  // Round shared endpoints, not individual widths. The tiny bias makes equivalent
+  // recursive coordinates agree when floating-point noise straddles half a pixel.
+  const left = Math.round(x * matrix.a + matrix.e + 1e-7);
+  const top = Math.round(y * matrix.d + matrix.f + 1e-7);
+  const right = Math.round((x + width) * matrix.a + matrix.e + 1e-7);
+  const bottom = Math.round((y + height) * matrix.d + matrix.f + 1e-7);
+  return [left, top, right - left, bottom - top];
+}
+
+function drawRegion(ctx, background, family, seed, x, y, width, height, scale, area, cache, matrix) {
   if (!intersects(x, y, width, height, area)) return;
   if (Math.min(width, height) * scale < 0.8) {
-    ctx.fillStyle = background.color; ctx.fillRect(x, y, width, height);
+    ctx.fillStyle = background.color; ctx.fillRect(...rasterBounds(matrix, x, y, width, height));
     return;
   }
   if (cache && Math.max(width, height) * scale <= 192) {
@@ -151,7 +161,8 @@ function drawRegion(ctx, background, family, seed, x, y, width, height, scale, a
       const ratio = width / height;
       thumbnail = surface(Math.max(1, Math.round(resolution * Math.min(1, ratio))),
         Math.max(1, Math.round(resolution / Math.max(1, ratio))));
-      drawRegion(thumbnail.getContext("2d"), background, family, seed, 0, 0, thumbnail.width, thumbnail.height, 1, null, false);
+      const thumbnailContext = thumbnail.getContext("2d");
+      drawRegion(thumbnailContext, background, family, seed, 0, 0, thumbnail.width, thumbnail.height, 1, null, false, thumbnailContext.getTransform());
       background.thumbnailPixels += thumbnail.width * thumbnail.height;
       while (background.thumbnails.size >= 512 || background.thumbnailPixels > 4 * 1024 * 1024) {
         const oldest = background.thumbnails.keys().next().value, previous = background.thumbnails.get(oldest);
@@ -160,37 +171,47 @@ function drawRegion(ctx, background, family, seed, x, y, width, height, scale, a
       }
     } else background.thumbnails.delete(key);
     background.thumbnails.set(key, thumbnail);
-    ctx.drawImage(thumbnail, x, y, width, height);
+    const bounds = rasterBounds(matrix, x, y, width, height);
+    if (bounds[2] > 0 && bounds[3] > 0) ctx.drawImage(thumbnail, ...bounds);
     return;
   }
   const children = regionChildren(family, seed);
   if (children) {
     children.forEach((child, index) => drawRegion(ctx, background, child.family,
       positionSeed(seed, family.id, index, 3571), x + child.x * width, y + child.y * height,
-      width * child.size, height * child.size, scale, area, cache));
+      width * child.size, height * child.size, scale, area, cache, matrix));
   } else {
     for (const tile of family.tiles) {
       const tx = x + tile.x / background.layout.width * width, ty = y + tile.y * height;
       const tw = tile.width / background.layout.width * width, th = tile.height * height;
-      if (intersects(tx, ty, tw, th, area)) ctx.drawImage(background.images[tile.image], tx, ty, tw, th);
+      if (intersects(tx, ty, tw, th, area)) {
+        const bounds = rasterBounds(matrix, tx, ty, tw, th);
+        if (bounds[2] > 0 && bounds[3] > 0) ctx.drawImage(background.images[tile.image], ...bounds);
+      }
     }
   }
 }
 
 export function drawPictures(ctx, background, area, scale = 1) {
-  const [x, y, width, height] = area;
-  const x0 = Math.floor(x / background.width), x1 = Math.ceil((x + width) / background.width);
-  const y0 = Math.floor(y / background.height), y1 = Math.ceil((y + height) / background.height);
-  if ((x1 - x0) * (y1 - y0) > 2048) {
-    // At extreme overview scales individual regions are below useful resolution.
-    ctx.fillStyle = background.color; ctx.fillRect(...area);
-    return;
-  }
-  for (let row = y0; row < y1; row++) for (let col = x0; col < x1; col++) {
-    const { family, seed } = regionFamily(background.hierarchy, col, row);
-    drawRegion(ctx, background, family, seed, col * background.width, row * background.height,
-      background.width, background.height, scale, area, true);
-  }
+  const matrix = ctx.getTransform();
+  ctx.save();
+  try {
+    // Canvas clipping remains in device space; rasterize each shared edge once.
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const [x, y, width, height] = area;
+    const x0 = Math.floor(x / background.width), x1 = Math.ceil((x + width) / background.width);
+    const y0 = Math.floor(y / background.height), y1 = Math.ceil((y + height) / background.height);
+    if ((x1 - x0) * (y1 - y0) > 2048) {
+      // At extreme overview scales individual regions are below useful resolution.
+      ctx.fillStyle = background.color; ctx.fillRect(...rasterBounds(matrix, ...area));
+      return;
+    }
+    for (let row = y0; row < y1; row++) for (let col = x0; col < x1; col++) {
+      const { family, seed } = regionFamily(background.hierarchy, col, row);
+      drawRegion(ctx, background, family, seed, col * background.width, row * background.height,
+        background.width, background.height, scale, area, true, matrix);
+    }
+  } finally { ctx.restore(); }
 }
 
 function notify(message) {
@@ -495,9 +516,12 @@ function openPanel() {
     };
     range.onpointerup = () => { pressed = false; hideEditor(); };
     range.onpointercancel = range.onlostpointercapture = () => { pressed = false; hideEditor(); };
-    slider.onpointerleave = () => {
+    slider.onpointerleave = (event = {}) => {
       if (pressed) return;
-      if (document.activeElement === number) { void commit(); range.focus(); }
+      if (document.activeElement === number) {
+        void commit();
+        if (event.relatedTarget && !document.hidden && document.hasFocus()) range.focus();
+      }
       hideEditor();
     };
     const sizeNumber = () => { number.style.width = `${Math.max(1, number.value.length)}ch`; };
@@ -733,7 +757,8 @@ app.registerExtension({
     finally { busy = false; }
   },
   afterConfigureGraph() { install(app.canvas); },
-  getCanvasMenuItems() {
-    return sourceMenuItems([{ content: busy ? "画布背景（读取中）" : "画布背景…", disabled: busy, callback: openPanel }]);
-  },
+});
+
+registerMenuItem("canvas-background", {
+  canvas: () => ({ content: busy ? "画布背景（读取中）" : "画布背景…", disabled: busy, callback: openPanel }),
 });

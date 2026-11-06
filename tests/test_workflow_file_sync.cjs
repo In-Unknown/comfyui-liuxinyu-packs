@@ -8,6 +8,7 @@ const source = fs.readFileSync(path.join(__dirname, '../workflow_file_sync.js'),
   .replace(/^import .*;\r?\n/gm, '');
 const menuSource = fs.readFileSync(path.join(__dirname, '../menu_source.js'), 'utf8')
   .replace(/^import .*;\r?\n/gm, '').replace(/^export /gm, '');
+const menuOrder = fs.readFileSync(path.join(__dirname, '../menu_order.js'), 'utf8').replace(/^export /gm, '');
 const graph = (value) => ({ nodes: [{ id: 1, widgets_values: [value] }], links: [] });
 const copy = (value) => JSON.parse(JSON.stringify(value));
 
@@ -21,7 +22,7 @@ function harness({ savedAt = 1000, modified = 2000, server = graph('server'), st
   const requests = [];
   const loads = [];
   const warnings = [];
-  let extension, nextTimer = 0;
+  let extension, menuExtension, nextTimer = 0;
   const now = 5000;
   storage ||= new Map();
   if (!storage.has('Comfy.Workflow.DraftIndex.v2:personal')) {
@@ -103,15 +104,19 @@ function harness({ savedAt = 1000, modified = 2000, server = graph('server'), st
   const app = {
     rootGraph: { serialize: () => copy(state.canvas) },
     extensionManager: { workflow: workflows, toast: { add: (v) => warnings.push(v) } },
-    registerExtension(e) { extension = e; },
+    registerExtension(e) { if (e.name === 'liuxinyu.MenuSource') menuExtension = e; else extension = e; },
     async loadGraphData(data, clean, restoreView, target) {
       loads.push(copy(data));
       assert.equal(target, workflow);
       extension.beforeLoadGraph();
       if (state.failLoad) { state.failLoad = false; return false; }
-      workflow.activeState = copy(data);
-      workflow.changeTracker.initialState = copy(data);
       state.canvas = copy(data);
+      state.afterConfigure?.({ frames, canvas: state.canvas });
+      await extension.afterConfigureGraph();
+      // Native afterLoadNewGraph snapshots only after afterConfigureGraph resolves.
+      workflow.activeState = copy(state.canvas);
+      workflow.changeTracker.initialState = copy(state.canvas);
+      workflow.changeTracker.updateModified();
       drafts.saveDraft(workflow.path, JSON.stringify(data), {});
       extension.afterLoadGraph();
       // Native activation takes its baseline before afterLoadGraph extensions
@@ -123,7 +128,7 @@ function harness({ savedAt = 1000, modified = 2000, server = graph('server'), st
   };
   class TestDate extends Date { static now() { return now; } }
   const document = { createElement: element, body: { append() {} }, visibilityState: 'visible' };
-  vm.runInNewContext(menuSource + '\n' + source, {
+  vm.runInNewContext(menuOrder + '\n' + menuSource + '\n' + source, {
     app, api, Date: TestDate,
     localStorage: { getItem: (k) => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, v) },
     document,
@@ -154,9 +159,97 @@ function harness({ savedAt = 1000, modified = 2000, server = graph('server'), st
     extension.afterLoadGraph();
     await flush();
   }
-  return { extension, workflow, workflows, drafts, payloads, state, storage,
+  return { extension, menuExtension, workflow, workflows, drafts, payloads, state, storage,
+    load: (data) => app.loadGraphData(data, true, true, workflow),
     dialogs, requests, loads, warnings, listeners, actions, restore, flush, intervals, document, frames };
 }
+
+test('ordinary open and repeated save/reload capture initialized nested Switch sockets', async () => {
+  for (const type of ['STRING', 'ARRAY', 'INT']) {
+    const saved = { nodes: [], links: [], definitions: { subgraphs: [760, 736].map(id => ({
+      id: 'sub-' + id, nodes: [{ id, type: 'ComfySwitchNode',
+        inputs: [{ name: 'on_false', type }, { name: 'on_true', type }, { name: 'switch', type: 'BOOLEAN' }],
+        outputs: [{ name: 'output', type }], widgets_values: [false] }],
+    })) } };
+    const h = harness({ modified: 900, server: saved });
+    h.state.afterConfigure = ({ frames, canvas }) => {
+      for (const sub of canvas.definitions.subgraphs) {
+        const node = sub.nodes[0];
+        node.inputs[0].type = node.inputs[1].type = node.outputs[0].type = '*';
+        // Reproduce native applyMatchType: configure resets the sockets;
+        // its queued animation-frame callback infers them from the cables.
+        frames.push(() => {
+          node.inputs[0].type = node.inputs[1].type = node.outputs[0].type = type;
+          frames.push(() => { node.outputs[0].type = type; });
+        });
+      }
+    };
+    let serialized = copy(saved);
+    for (let reload = 0; reload < 3; reload++) {
+      const loading = h.load(serialized);
+      await h.flush();
+      assert.equal(await loading, true);
+      h.workflow.changeTracker.captureCanvasState();
+      assert.equal(h.workflow.isModified, false, type + ': no edit after load');
+      assert.deepEqual(h.workflow.changeTracker.initialState, saved);
+      serialized = copy(h.state.canvas); // save and refresh the same file
+      assert.deepEqual(serialized, saved);
+      assert.equal(h.dialogs.length, 0);
+    }
+    const node = h.state.canvas.definitions.subgraphs[0].nodes[0];
+    node.widgets_values[0] = true;
+    h.workflow.changeTracker.captureCanvasState();
+    assert.equal(h.workflow.isModified, true, 'later widget edits still mark dirty');
+    node.widgets_values[0] = false;
+    h.workflow.changeTracker.captureCanvasState();
+    assert.equal(h.workflow.isModified, false);
+    node.outputs[0].type = 'FLOAT';
+    h.workflow.changeTracker.captureCanvasState();
+    assert.equal(h.workflow.isModified, true, 'later socket changes are not filtered');
+  }
+});
+
+test('initialization barrier never rewrites a baseline, clears drafts, or suppresses real edits', async () => {
+  const h = harness({ modified: 900 });
+  const initial = copy(h.workflow.changeTracker.initialState);
+  const draft = copy(h.payloads.get(h.workflow.path));
+  const waiting = h.extension.afterConfigureGraph();
+  h.state.canvas.nodes[0].widgets_values[0] = 'unsaved draft or real edit';
+  await h.flush();
+  await waiting;
+  assert.deepEqual(h.workflow.changeTracker.initialState, initial);
+  assert.deepEqual(h.payloads.get(h.workflow.path), draft);
+  h.workflow.changeTracker.captureCanvasState();
+  assert.equal(h.workflow.isModified, true);
+  assert.equal(h.loads.length, 0);
+  assert.equal(h.requests.length, 0);
+});
+
+test('normal loading waits for downstream JSONata microtasks before its native baseline', async () => {
+  const h = harness({ modified: 900 });
+  let structured;
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../structured_data.js'), 'utf8')
+    .replace(/^import .*;\r?\n/gm, ''), {
+    app: { registerExtension(e) { structured = e; } }, queueMicrotask,
+  });
+  const saved = { nodes: [{ id: 1, type: 'LiuxinyuStructuredTransform',
+    inputs: [{ name: 'sources.data0', type: 'STRING', label: 'data0 · STRING', link: 1 }],
+    outputs: [{ type: 'DICT', label: '结果 · DICT' }] }], links: [] };
+  h.state.afterConfigure = ({ frames, canvas }) => {
+    const data = canvas.nodes[0], sw = { outputs: [{ type: '*' }] };
+    const node = { comfyClass: data.type, inputs: data.inputs, outputs: data.outputs,
+      widgets: [{ name: 'result_type', value: '字典' }],
+      graph: { links: new Map([[1, { origin_id: 2, origin_slot: 0 }]]), getNodeById: () => sw },
+      setDirtyCanvas() {}, disconnectInput() { assert.fail('no cables should disconnect'); } };
+    structured.nodeCreated(node);
+    frames.push(() => { sw.outputs[0].type = 'STRING'; node.onConnectionsChange(1, 0, true); });
+  };
+  const loading = h.load(saved);
+  await h.flush(); await loading;
+  h.workflow.changeTracker.captureCanvasState();
+  assert.equal(h.workflow.isModified, false);
+  assert.deepEqual(h.workflow.changeTracker.initialState, saved);
+});
 
 test('sync waits for native match-type frames and real JSONata propagation before marking saved', async () => {
   const jsonTypes = 'DICT,ARRAY,STRING,INT,FLOAT,BOOLEAN,NULL';
@@ -255,7 +348,7 @@ test('dirty diagnostics expose delayed layout and real edits without changing gr
   h.state.canvas.nodes[0].widgets_values[0] = 'edited after capture';
   const before = JSON.stringify({ workflow: h.workflow, canvas: h.state.canvas,
     drafts: [...h.payloads], storage: [...h.storage], requests: h.requests });
-  h.extension.getCanvasMenuItems().find(item => item.content === '查看未保存差异').callback();
+  h.menuExtension.getCanvasMenuItems().find(item => item.content === '查看未保存差异').callback();
   const report = h.dialogs.at(-1).children.find(child => child.tag === 'textarea');
   assert.equal(report.readOnly, true);
   assert.match(report.value, /nodes\[id=1\]\.size/);
@@ -275,7 +368,7 @@ test('diagnostics ignore root viewport and node ordering but retain subgraph vie
   h.workflow.activeState.extra.ds = { scale: 2 };
   h.state.canvas = copy(h.workflow.activeState);
   h.state.canvas.definitions.subgraphs[0].extra.ds.scale = 3;
-  h.extension.getCanvasMenuItems().find(item => item.content === '查看未保存差异').callback();
+  h.menuExtension.getCanvasMenuItems().find(item => item.content === '查看未保存差异').callback();
   const report = h.dialogs.at(-1).children.find(child => child.tag === 'textarea').value;
   assert.match(report, /已保存基准 → 前端已记录状态：\n未发现字段差异。/);
   assert.match(report, /definitions.subgraphs.0.extra.ds.scale/);
@@ -490,7 +583,7 @@ test('visible page detects a later backend revision after cancelling without a f
 test('manual canvas command offers the same file again after cancelling', async () => {
   const h = harness(); await h.restore();
   h.dialogs[0].close('keep'); await h.flush();
-  const menu = h.extension.getCanvasMenuItems();
+  const menu = h.menuExtension.getCanvasMenuItems();
   assert(menu.every(item => item.className === 'liuxinyu-menu-source'));
   menu[0].callback(); await h.flush();
   assert.equal(h.dialogs.length, 2);
@@ -505,7 +598,7 @@ test('manual check after saving identical content reports no update without chan
   h.workflow.lastModified = h.state.modified = 6000;
   for (const fn of h.actions.workflow) fn({ name: 'saveWorkflow', args: [h.workflow], after: cb => cb() });
   const before = JSON.stringify({ workflow: h.workflow, canvas: h.state.canvas, drafts: [...h.payloads] });
-  h.extension.getCanvasMenuItems()[0].callback(); await h.flush();
+  h.menuExtension.getCanvasMenuItems()[0].callback(); await h.flush();
   assert.equal(h.dialogs.length, 0);
   assert.equal(h.loads.length, 0);
   assert.equal(h.warnings.at(-1).summary, '无需更新');
@@ -517,7 +610,7 @@ test('manual equality ignores root viewport, object keys and root node serializa
   const h = harness({ modified: 900 }); await h.restore();
   h.state.server = { nodes: [{ id: 1, type: 'A' }, { id: 2, type: 'B' }], links: [] };
   h.state.canvas = { links: [], nodes: [{ type: 'B', id: 2 }, { type: 'A', id: 1 }], extra: { ds: { scale: 2, offset: [3, 4] } } };
-  h.extension.getCanvasMenuItems()[0].callback(); await h.flush();
+  h.menuExtension.getCanvasMenuItems()[0].callback(); await h.flush();
   assert.equal(h.dialogs.length, 0);
   assert.equal(h.warnings.at(-1).summary, '无需更新');
 });
@@ -525,7 +618,7 @@ test('manual equality ignores root viewport, object keys and root node serializa
 test('manual check can acknowledge identical content with a newer mtime after cancelling automatic prompt', async () => {
   const h = harness({ server: graph('cached') }); await h.restore();
   h.dialogs[0].close('keep'); await h.flush();
-  h.extension.getCanvasMenuItems()[0].callback(); await h.flush();
+  h.menuExtension.getCanvasMenuItems()[0].callback(); await h.flush();
   assert.equal(h.dialogs.length, 1);
   assert.equal(h.warnings.at(-1).summary, '无需更新');
   assert.equal(h.loads.length, 0);
@@ -541,7 +634,7 @@ test('manual check uses live canvas and preserves widget, wiring and nested subg
     const h = harness({ modified: 900, server: graph('cached') }); await h.restore();
     assert.deepEqual(h.workflow.activeState, h.state.server);
     change(h.state.canvas);
-    h.extension.getCanvasMenuItems()[0].callback(); await h.flush();
+    h.menuExtension.getCanvasMenuItems()[0].callback(); await h.flush();
     assert.equal(h.dialogs.length, 1);
     assert.match(h.dialogs[0].children[1].textContent, /当前画布与后端文件内容不同/);
     assert.equal(h.loads.length, 0);
@@ -556,7 +649,7 @@ test('manual read failure or invalid workflow never claims equal or changes the 
     const before = JSON.stringify({ workflow: h.workflow, canvas: h.state.canvas, drafts: [...h.payloads] });
     if (failure === 'notWorkflow') h.state.server = {};
     else h.state[failure] = true;
-    h.extension.getCanvasMenuItems()[0].callback(); await h.flush();
+    h.menuExtension.getCanvasMenuItems()[0].callback(); await h.flush();
     assert.equal(h.dialogs.length, 0);
     assert.equal(h.loads.length, 0);
     assert.equal(h.warnings.at(-1).severity, 'warn');
@@ -570,7 +663,7 @@ test('navigation while manual content read is pending suppresses stale results',
     h.extension.beforeLoadGraph();
     h.workflows.activeWorkflow = { path: 'workflows/other.json', isPersisted: false };
   };
-  h.extension.getCanvasMenuItems()[0].callback(); await h.flush();
+  h.menuExtension.getCanvasMenuItems()[0].callback(); await h.flush();
   assert.equal(h.dialogs.length, 0);
   assert.equal(h.loads.length, 0);
   assert.equal(h.warnings.length, 0);
@@ -578,7 +671,7 @@ test('navigation while manual content read is pending suppresses stale results',
 
 test('manual synchronization rereads content changed after its comparison', async () => {
   const h = harness({ modified: 900 }); await h.restore();
-  h.extension.getCanvasMenuItems()[0].callback(); await h.flush();
+  h.menuExtension.getCanvasMenuItems()[0].callback(); await h.flush();
   assert.equal(h.dialogs.length, 1);
   h.state.server = graph('changed after manual comparison');
   h.state.modified = 950;

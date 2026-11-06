@@ -1,10 +1,11 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { entries, writePortOrder, refreshSubgraphOrder, subgraphOrderHosts, inputWidgetGroup, widgetLayoutHeight, inputLayoutTop } from "./port_order.js";
-import { sourceMenuItems } from "./menu_source.js";
+import { registerMenuItem } from "./menu_source.js";
 
 const PROPERTY = "liuxinyu_port_order";
 let busy = false;
+let chooser = null;
 
 function notify(message) {
   if (app.extensionManager?.toast) {
@@ -37,6 +38,102 @@ function counts(value) {
   return value ? `交叉 ${value.crossings}，穿框 ${value.nodeIntersections}，重叠 ${value.overlaps}` : "";
 }
 
+function rankedChoices(choices) {
+  const fixed = choices.filter(item => item.preservesPortOrder && item.result.checks &&
+    Object.values(item.result.checks).every(value => value === 0));
+  if (fixed.length) choices = fixed;
+  const quality = item => [item.result.checks?.overlaps || 0, item.result.checks?.nodeIntersections || 0,
+    item.result.checks?.crossings || 0, item.result.cost ?? 0];
+  const ranked = [...choices].sort((a, b) => {
+    const x = quality(a), y = quality(b);
+    for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] - y[i];
+    return 0;
+  });
+  if (!ranked.length) return [];
+  const best = quality(ranked[0]);
+  return ranked.filter(item => quality(item).every((value, i) =>
+    i === 3 ? value <= best[i] + Math.max(1, Math.abs(best[i]) * .15) : value === best[i])).slice(0, 5);
+}
+
+function choicePanel(choices, select, valid) {
+  if (typeof document === "undefined") return null;
+  const box = document.createElement("div");
+  box.setAttribute("role", "region");
+  box.setAttribute("aria-label", "整理方案选择");
+  box.style.cssText = "position:fixed;right:20px;bottom:54px;z-index:10000;width:220px;border:1px solid #617789;border-radius:8px;background:#202a34;color:#eef5fa;box-shadow:0 4px 16px #0006;font:13px/1.6 sans-serif;overflow:hidden";
+  const header = document.createElement("div");
+  header.textContent = "整理方案";
+  header.title = "拖动此处移动窗口";
+  header.style.cssText = "padding:9px 12px;cursor:move;user-select:none;touch-action:none;border-bottom:1px solid #617789";
+  let drag = null;
+  header.onpointerdown = event => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const rect = box.getBoundingClientRect();
+    drag = { id: event.pointerId, x: event.clientX - rect.left, y: event.clientY - rect.top };
+    header.setPointerCapture(event.pointerId);
+  };
+  header.onpointermove = event => {
+    if (!drag || drag.id !== event.pointerId) return;
+    box.style.left = `${Math.max(0, Math.min(window.innerWidth - 64, event.clientX - drag.x))}px`;
+    box.style.top = `${Math.max(0, Math.min(window.innerHeight - 40, event.clientY - drag.y))}px`;
+    box.style.right = box.style.bottom = "auto";
+  };
+  header.onpointerup = header.onpointercancel = header.onlostpointercapture = () => { drag = null; };
+  const list = document.createElement("div");
+  list.style.cssText = "padding:8px;display:grid;gap:5px";
+  const buttons = [];
+  let selected = 0;
+  const refresh = () => buttons.forEach((button, index) => {
+    button.setAttribute("aria-pressed", String(index === selected));
+    button.style.background = index === selected ? "#3a5870" : "#293844";
+  });
+  const button = label => {
+    const item = document.createElement("button");
+    item.textContent = label;
+    item.type = "button";
+    item.tabIndex = -1;
+    item.style.cssText = "padding:6px 10px;border:1px solid #617789;border-radius:4px;color:inherit;cursor:pointer;text-align:left";
+    // Keep canvas focus; no keyboard listeners, modal backdrop, or focus trap.
+    item.onpointerdown = event => event.preventDefault();
+    return item;
+  };
+  const close = () => {
+    clearInterval(timer);
+    box.remove();
+    if (chooser?.element === box) chooser = null;
+  };
+  choices.forEach((_, index) => {
+    const bestCost = choices[0].result.cost;
+    const cost = choices[index].result.cost;
+    const percent = bestCost > 0 && Number.isFinite(cost) ? ((cost-bestCost)/bestCost*100).toFixed(1) : null;
+    const gap = percent !== null ? `（↓${percent}%）` : "";
+    const item = button(index === 0 ? "方案 1（推荐）" : `方案 ${index + 1}${gap}`);
+    if (index > 0 && percent !== null) item.title = `综合布局代价比推荐方案高 ${percent}%；分数越低越好。`;
+    item.onclick = () => {
+      try {
+        if (!valid()) { close(); return; }
+        if (index === selected) return;
+        select(index); selected = index; refresh();
+      }
+      catch (error) { close(); notify(error.message); }
+    };
+    buttons.push(item);
+    list.append(item);
+  });
+  const confirm = button("确定");
+  confirm.style.textAlign = "center";
+  confirm.onclick = close;
+  list.append(confirm);
+  box.append(header, list);
+  document.body.append(box);
+  refresh();
+  const timer = setInterval(() => {
+    try { if (!valid()) close(); } catch { close(); }
+  }, 250);
+  return { close, element: box };
+}
+
 function describeConflicts(conflicts = []) {
   const edge = e => `${e.source}→${e.target}`;
   return conflicts.slice(0, 3).map(c => c.kind === "crossing" ? `${edge(c.edges[0])} 与 ${edge(c.edges[1])} 交叉` :
@@ -44,11 +141,15 @@ function describeConflicts(conflicts = []) {
 }
 
 function searchProgress(value) {
+    if (value.stage === "construct") return "正在利用平面嵌入与端口关系构造布局，并求解小层内的最少交叉顺序…";
+  if (value.stage === "ports_fixed") return "正在保持当前端口顺序，只调整节点位置，优先寻找零交叉、零穿框方案…";
+  if (value.stage === "ports_flexible") return "固定端口顺序的搜索尚未找到无冲突方案，继续尝试调整端口顺序…";
   if (value.stage === "topology") return `整理节点：正在检查拓扑\n${value.nodes} 个节点，${value.edges} 条内部连接`;
   if (value.stage === "nonplanar") return "连接拓扑无法消除全部交叉，继续搜索可改善的布局…";
   if (value.stage === "compact") return `正在压缩当前最佳候选并复核…\n${counts(value.best)}\n已尝试 ${value.trials} 个布局，用时 ${value.elapsed} 秒`;
   if (value.stage === "align") return `正在对齐主链和支线中心，并检查交叉与遮挡…\n已尝试 ${value.trials} 个布局，用时 ${value.elapsed} 秒`;
-  return `正在搜索布局 · ${value.elapsed} 秒 · 已尝试 ${value.trials} 个\n原布局：${counts(value.before)}\n当前最好：${counts(value.best)}`;
+  if (value.stage === "wires") return `正在按输入顺序拉直、联合避让挡路节点，并整理输入/输出侧同列支路…\n${counts(value.best)}\n已尝试 ${value.trials} 个布局，用时 ${value.elapsed} 秒`;
+  return `${value.preservePortOrder ? "正在保持端口顺序搜索布局" : "正在搜索布局"} · ${value.elapsed} 秒 · 已尝试 ${value.trials} 个\n原布局：${counts(value.before)}\n当前最好：${counts(value.best)}`;
 }
 
 function selection() {
@@ -148,7 +249,7 @@ function restore(saved) {
   for (const graph of saved.subgraphs?.keys() || []) refreshSubgraphOrder(graph);
 }
 
-function apply(nodes, plan) {
+function apply(nodes, plan, preservePortOrder = false) {
   const byId = new Map(nodes.map(n => [String(n.id), n]));
   if (plan.length !== nodes.length || new Set(plan.map(p => p.id)).size !== nodes.length) {
     throw new Error("整理结果与所选节点不匹配。");
@@ -162,9 +263,14 @@ function apply(nodes, plan) {
       const indices = item[side];
       if (indices.length !== list.length || new Set(indices).size !== list.length ||
           indices.some(i => !Number.isInteger(i) || i < 0 || i >= list.length)) throw new Error("整理结果端口不匹配。");
+      if (preservePortOrder) {
+        const position = index => (side === "inputs" ? node.getInputPos(index) : node.getOutputPos(index))[1];
+        const current = list.map((_, i) => i).sort((a, b) => position(a) - position(b));
+        if (current.some((value, i) => value !== indices[i])) throw new Error("保留端口顺序的候选与当前显示顺序不匹配。");
+      }
       if (list.length) order[side] = indices.map(i => list[i].key);
     }
-    writePortOrder(node, order);
+    if (!preservePortOrder) writePortOrder(node, order);
     node.pos = [...item.pos];
     node.arrange();
   }
@@ -210,6 +316,7 @@ async function request(data, controller, onProgress = () => {}) {
 
 async function arrangeSelected() {
   if (busy) return;
+  chooser?.close();
   const canvas = app.canvas;
   const graph = canvas?.graph;
   const chosen = selection();
@@ -227,6 +334,7 @@ async function arrangeSelected() {
     const data = snapshot(graph, chosen);
     const fingerprint = layoutFingerprint(graph, chosen);
     const unchanged = () => canvas.graph === graph && app.canvas === canvas &&
+      chosen.every(node => graph._nodes.includes(node)) &&
       !canvas.read_only && !LiteGraph.vueNodesMode && canvas.links_render_mode === LiteGraph.SPLINE_LINK &&
       layoutFingerprint(graph, chosen) === fingerprint;
     status.update("正在读取节点布局并检查拓扑…\n可继续缩放、平移画布。");
@@ -240,42 +348,61 @@ async function arrangeSelected() {
       return;
     }
     const saved = checkpoint(chosen);
-    let measured;
-    // Synchronous trial: measure native widget/socket layout, restore before yielding.
-    try {
-      apply(chosen, plan.nodes);
-      measured = snapshot(graph, chosen);
-    } finally { restore(saved); }
-    status.update("候选布局已找到，正在复核实际端口与控件位置…");
-    const result = await request({ ...measured, verify: true, baseline: data }, controller);
-    if (controller.signal.aborted) { notify("已取消整理，画布保持原样。"); return; }
-    if (!unchanged()) { notify("计算期间工作流已变化，本次结果未应用，请重新整理。"); return; }
-    if (result.status !== "ok") { notify(`按实际端口位置复核后，没有优于原布局，画布保持原样。\n${counts(result.checks)}\n${describeConflicts(result.conflicts)}`); return; }
-    graph.beforeChange();
-    try {
-      apply(chosen, plan.nodes);
-      graph.change();
-    } catch (error) {
-      restore(saved);
-      throw error;
-    } finally { graph.afterChange(); canvas.setDirty(true, true); }
+    const verified = [];
+    let lastResult;
+    const candidates = (plan.candidates?.length ? plan.candidates : [{ nodes: plan.nodes, preservesPortOrder: plan.preservesPortOrder }]).slice(0, 5);
+    for (const candidate of candidates) {
+      let measured;
+      // Synchronous trial: restore before awaiting each verification request.
+      try {
+        apply(chosen, candidate.nodes, candidate.preservesPortOrder);
+        measured = snapshot(graph, chosen);
+      } finally { restore(saved); }
+      status.update("候选布局已找到，正在逐个复核实际端口与控件位置…");
+      lastResult = await request({ ...measured, verify: true, baseline: data }, controller);
+      if (controller.signal.aborted) { notify("已取消整理，画布保持原样。"); return; }
+      if (!unchanged()) { notify("计算期间工作流已变化，本次结果未应用，请重新整理。"); return; }
+      if (lastResult.status === "ok") verified.push({ nodes: candidate.nodes, preservesPortOrder: candidate.preservesPortOrder, result: lastResult });
+    }
+    const choices = rankedChoices(verified);
+    if (!choices.length) { notify(`按实际端口位置复核后，没有优于原布局，画布保持原样。\n${counts(lastResult?.checks)}\n${describeConflicts(lastResult?.conflicts)}`); return; }
+    const { result } = choices[0];
+    let expected;
+    const select = index => {
+      const previous = checkpoint(chosen);
+      graph.beforeChange();
+      try {
+        restore(saved);
+        apply(chosen, choices[index].nodes, choices[index].preservesPortOrder);
+        graph.change();
+      } catch (error) {
+        restore(previous);
+        throw error;
+      } finally { graph.afterChange(); canvas.setDirty(true, true); }
+      expected = layoutFingerprint(graph, chosen);
+    };
+    select(0);
+    if (choices.length > 1) chooser = choicePanel(choices, select, () => canvas.graph === graph && app.canvas === canvas &&
+      chosen.every(node => graph._nodes.includes(node)) &&
+      !canvas.read_only && !LiteGraph.vueNodesMode && canvas.links_render_mode === LiteGraph.SPLINE_LINK &&
+      layoutFingerprint(graph, chosen) === expected);
     const checks = result.checks || plan.checks;
     const remaining = checks && Object.values(checks).some(v => v > 0);
     notify(`已整理 ${chosen.length} 个节点：${counts(result.before || plan.before)} → ${counts(checks)}。\n`+
       (remaining ? `已采用本次找到的改善方案，仍有剩余冲突。${describeConflicts(result.conflicts || plan.conflicts)}\n` : "")+
-      `已尝试 ${plan.trials} 个布局，用时 ${plan.elapsed} 秒；可撤销、保存。`);
+      `已尝试 ${plan.trials} 个布局，用时 ${plan.elapsed} 秒；可撤销、保存。`+
+      (choices[0].preservesPortOrder ? "\n已保留原端口顺序，仅调整节点位置。" : "")+
+      (choices.length > 1 ? `\n保留评分靠前的 ${choices.length} 个接近最优方案，可在浮窗中切换选择。` :
+        candidates.length > 1 ? `\n搜索保留 ${candidates.length} 个候选，实际端口复核后仅保留 1 个合格方案，因此不显示选择窗。` :
+        "\n本次仅找到 1 个符合条件的方案，没有其他差距足够小的方案可切换，因此不显示选择窗。"));
   } catch (error) {
     notify(controller.signal.aborted ? (controller.signal.reason === "user" ? "已取消整理，画布保持原样。" : "整理请求超时，画布保持原样。") : error.message);
   } finally { controller.abort(); status.close(); busy = false; }
 }
 
 function menu() {
-  return selection().length >= 2 ? sourceMenuItems([{ content: busy ? "整理节点（计算中）" : "整理节点", disabled: busy,
-    callback: () => { void arrangeSelected(); } }]) : [];
+  return selection().length >= 2 ? { content: busy ? "整理节点（计算中）" : "整理节点", disabled: busy,
+    callback: () => { void arrangeSelected(); } } : null;
 }
 
-app.registerExtension({
-  name: "liuxinyu.GraphLayout",
-  getCanvasMenuItems: menu,
-  getNodeMenuItems: menu,
-});
+registerMenuItem("graph-layout", { canvas: menu, node: menu });

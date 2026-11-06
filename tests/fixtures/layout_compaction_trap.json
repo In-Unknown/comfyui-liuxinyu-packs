@@ -1,0 +1,1342 @@
+{
+  "nodes": [
+    {
+      "id": "5",
+      "pos": [
+        1065.1817973559669,
+        -3684.539368847291
+      ],
+      "size": [
+        231.10746632072005,
+        138
+      ],
+      "selected": true,
+      "titleHeight": 30,
+      "startY": 0,
+      "inputTop": 4,
+      "inputs": [
+        {
+          "key": "[\"name\",\"groups.t1\",0]",
+          "x": 10,
+          "y": 34,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"groups.t2\",0]",
+          "x": 10,
+          "y": 54,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"groups.t3\",0]",
+          "x": 10,
+          "y": 74,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"groups.t4\",0]",
+          "x": 10,
+          "y": 14,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"groups.t5\",0]",
+          "x": 10,
+          "y": 94,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"exclude_same_index\",0]",
+          "x": 10,
+          "y": 114,
+          "height": 24
+        }
+      ],
+      "outputs": [
+        {
+          "key": "[\"name\",\"参数组合\",0]",
+          "x": 222.10746632071994,
+          "y": 14,
+          "height": 20
+        }
+      ],
+      "freeHeight": 0
+    },
+    {
+      "id": "9",
+      "pos": [
+        1481.5208785107595,
+        -3684.539368847291
+      ],
+      "size": [
+        363.48697988821004,
+        735.0005404693434
+      ],
+      "selected": true,
+      "titleHeight": 30,
+      "startY": 0,
+      "inputTop": 4,
+      "inputs": [
+        {
+          "key": "[\"name\",\"strings.t1\",0]",
+          "x": 10,
+          "y": 34,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"parameters\",0]",
+          "x": 10,
+          "y": 14,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"template\",0]",
+          "x": 10,
+          "y": 54,
+          "height": 689.0005404693434
+        }
+      ],
+      "outputs": [
+        {
+          "key": "[\"name\",\"字符串数组\",0]",
+          "x": 354.48697988821004,
+          "y": 14,
+          "height": 20
+        }
+      ],
+      "freeHeight": 0
+    },
+    {
+      "id": "17",
+      "pos": [
+        1901.5440460616237,
+        -2564.9683957217485
+      ],
+      "size": [
+        372.08640361179926,
+        700
+      ],
+      "selected": true,
+      "titleHeight": 30,
+      "startY": 0,
+      "inputTop": 4,
+      "inputs": [
+        {
+          "key": "[\"name\",\"images.输入图像1\",0]",
+          "x": 10,
+          "y": 362,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"images.输入图像2\",0]",
+          "x": 10,
+          "y": 134,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"images.输入图像3\",0]",
+          "x": 10,
+          "y": 154,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"known_mask\",0]",
+          "x": 10,
+          "y": 174,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"prompt\",0]",
+          "x": 10,
+          "y": 14,
+          "height": 120
+        },
+        {
+          "key": "[\"name\",\"model\",0]",
+          "x": 10,
+          "y": 194,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"size\",0]",
+          "x": 10,
+          "y": 218,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"timeout_seconds\",0]",
+          "x": 10,
+          "y": 242,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"quality\",0]",
+          "x": 10,
+          "y": 266,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"fixed_reference\",0]",
+          "x": 10,
+          "y": 290,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"max_concurrency\",0]",
+          "x": 10,
+          "y": 314,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"force_regenerate\",0]",
+          "x": 10,
+          "y": 338,
+          "height": 24
+        }
+      ],
+      "outputs": [
+        {
+          "key": "[\"name\",\"IMAGE\",0]",
+          "x": 363.08640361179914,
+          "y": 14,
+          "height": 20
+        }
+      ],
+      "freeHeight": 326
+    },
+    {
+      "id": "18",
+      "pos": [
+        810.0770492044612,
+        -1814.9683957217485
+      ],
+      "size": [
+        647.4438293062983,
+        154
+      ],
+      "selected": true,
+      "titleHeight": 30,
+      "startY": 0,
+      "inputTop": 4,
+      "inputs": [
+        {
+          "key": "[\"name\",\"path\",0]",
+          "x": 10,
+          "y": 14,
+          "height": 72
+        },
+        {
+          "key": "[\"name\",\"target_width\",0]",
+          "x": 10,
+          "y": 86,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"target_height\",0]",
+          "x": 10,
+          "y": 110,
+          "height": 24
+        }
+      ],
+      "outputs": [
+        {
+          "key": "[\"name\",\"图像批次\",0]",
+          "x": 638.4438293062983,
+          "y": 14,
+          "height": 20
+        }
+      ],
+      "freeHeight": 0
+    },
+    {
+      "id": "19",
+      "pos": [
+        1481.5208785107595,
+        -1814.9683957217485
+      ],
+      "size": [
+        363.1386262902463,
+        976
+      ],
+      "selected": true,
+      "titleHeight": 30,
+      "startY": 0,
+      "inputTop": 4,
+      "inputs": [
+        {
+          "key": "[\"name\",\"images.输入图像1\",0]",
+          "x": 10,
+          "y": 14,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"images.输入图像2\",0]",
+          "x": 10,
+          "y": 34,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"known_mask\",0]",
+          "x": 10,
+          "y": 54,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"prompt\",0]",
+          "x": 10,
+          "y": 74,
+          "height": 268
+        },
+        {
+          "key": "[\"name\",\"model\",0]",
+          "x": 10,
+          "y": 342,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"size\",0]",
+          "x": 10,
+          "y": 366,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"timeout_seconds\",0]",
+          "x": 10,
+          "y": 390,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"quality\",0]",
+          "x": 10,
+          "y": 414,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"fixed_reference\",0]",
+          "x": 10,
+          "y": 438,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"max_concurrency\",0]",
+          "x": 10,
+          "y": 462,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"force_regenerate\",0]",
+          "x": 10,
+          "y": 486,
+          "height": 24
+        }
+      ],
+      "outputs": [
+        {
+          "key": "[\"name\",\"IMAGE\",0]",
+          "x": 354.1386262902462,
+          "y": 14,
+          "height": 20
+        }
+      ],
+      "freeHeight": 474
+    },
+    {
+      "id": "22",
+      "pos": [
+        2335.6725500600032,
+        -2110.9683957217485
+      ],
+      "size": [
+        452.2140675671235,
+        1816
+      ],
+      "selected": true,
+      "titleHeight": 30,
+      "startY": 0,
+      "inputTop": 4,
+      "inputs": [
+        {
+          "key": "[\"name\",\"images.输入图像1\",0]",
+          "x": 10,
+          "y": 14,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"images.输入图像2\",0]",
+          "x": 10,
+          "y": 34,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"known_mask\",0]",
+          "x": 10,
+          "y": 54,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"prompt\",0]",
+          "x": 10,
+          "y": 74,
+          "height": 688
+        },
+        {
+          "key": "[\"name\",\"model\",0]",
+          "x": 10,
+          "y": 762,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"size\",0]",
+          "x": 10,
+          "y": 786,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"timeout_seconds\",0]",
+          "x": 10,
+          "y": 810,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"quality\",0]",
+          "x": 10,
+          "y": 834,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"fixed_reference\",0]",
+          "x": 10,
+          "y": 858,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"max_concurrency\",0]",
+          "x": 10,
+          "y": 882,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"force_regenerate\",0]",
+          "x": 10,
+          "y": 906,
+          "height": 24
+        }
+      ],
+      "outputs": [
+        {
+          "key": "[\"name\",\"IMAGE\",0]",
+          "x": 443.2140675671235,
+          "y": 14,
+          "height": 20
+        }
+      ],
+      "freeHeight": 894
+    },
+    {
+      "id": "31",
+      "pos": [
+        2812.7351291731775,
+        -2506.9683957217485
+      ],
+      "size": [
+        270,
+        130
+      ],
+      "selected": true,
+      "titleHeight": 30,
+      "startY": 0,
+      "inputTop": 4,
+      "inputs": [
+        {
+          "key": "[\"name\",\"image\",0]",
+          "x": 10,
+          "y": 14,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"upscale_method\",0]",
+          "x": 10,
+          "y": 34,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"width\",0]",
+          "x": 10,
+          "y": 58,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"height\",0]",
+          "x": 10,
+          "y": 82,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"crop\",0]",
+          "x": 10,
+          "y": 106,
+          "height": 24
+        }
+      ],
+      "outputs": [
+        {
+          "key": "[\"name\",\"IMAGE\",0]",
+          "x": 261,
+          "y": 14,
+          "height": 20
+        }
+      ],
+      "freeHeight": 0
+    },
+    {
+      "id": "32",
+      "pos": [
+        2812.7351291731775,
+        -2110.9683957217485
+      ],
+      "size": [
+        270,
+        342
+      ],
+      "selected": true,
+      "titleHeight": 30,
+      "startY": 0,
+      "inputTop": 4,
+      "inputs": [
+        {
+          "key": "[\"name\",\"image\",0]",
+          "x": 10,
+          "y": 14,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"folder\",0]",
+          "x": 10,
+          "y": 34,
+          "height": 48
+        },
+        {
+          "key": "[\"name\",\"filename\",0]",
+          "x": 10,
+          "y": 82,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"overwrite\",0]",
+          "x": 10,
+          "y": 106,
+          "height": 24
+        }
+      ],
+      "outputs": [],
+      "freeHeight": 0
+    },
+    {
+      "id": "33",
+      "pos": [
+        3106.7351291731775,
+        -2506.9683957217485
+      ],
+      "size": [
+        270,
+        342
+      ],
+      "selected": true,
+      "titleHeight": 30,
+      "startY": 0,
+      "inputTop": 4,
+      "inputs": [
+        {
+          "key": "[\"name\",\"image\",0]",
+          "x": 10,
+          "y": 14,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"folder\",0]",
+          "x": 10,
+          "y": 34,
+          "height": 48
+        },
+        {
+          "key": "[\"name\",\"filename\",0]",
+          "x": 10,
+          "y": 82,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"overwrite\",0]",
+          "x": 10,
+          "y": 106,
+          "height": 24
+        }
+      ],
+      "outputs": [],
+      "freeHeight": 0
+    },
+    {
+      "id": "37",
+      "pos": [
+        2335.6725500600032,
+        -3683.558408615545
+      ],
+      "size": [
+        273.89194211944414,
+        142.78780982102995
+      ],
+      "selected": true,
+      "titleHeight": 30,
+      "startY": 0,
+      "inputTop": 4,
+      "inputs": [
+        {
+          "key": "[\"name\",\"image\",0]",
+          "x": 10,
+          "y": 14,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"upscale_method\",0]",
+          "x": 10,
+          "y": 34,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"width\",0]",
+          "x": 10,
+          "y": 58,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"height\",0]",
+          "x": 10,
+          "y": 82,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"crop\",0]",
+          "x": 10,
+          "y": 106,
+          "height": 24
+        }
+      ],
+      "outputs": [
+        {
+          "key": "[\"name\",\"IMAGE\",0]",
+          "x": 264.89194211944414,
+          "y": 14,
+          "height": 20
+        }
+      ],
+      "freeHeight": 0
+    },
+    {
+      "id": "38",
+      "pos": [
+        2335.6725500600032,
+        -2564.9683957217485
+      ],
+      "size": [
+        270,
+        342
+      ],
+      "selected": true,
+      "titleHeight": 30,
+      "startY": 0,
+      "inputTop": 4,
+      "inputs": [
+        {
+          "key": "[\"name\",\"image\",0]",
+          "x": 10,
+          "y": 14,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"folder\",0]",
+          "x": 10,
+          "y": 34,
+          "height": 48
+        },
+        {
+          "key": "[\"name\",\"filename\",0]",
+          "x": 10,
+          "y": 82,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"overwrite\",0]",
+          "x": 10,
+          "y": 106,
+          "height": 24
+        }
+      ],
+      "outputs": [],
+      "freeHeight": 0
+    },
+    {
+      "id": "39",
+      "pos": [
+        2633.5644921794474,
+        -3683.558408615545
+      ],
+      "size": [
+        270,
+        342
+      ],
+      "selected": true,
+      "titleHeight": 30,
+      "startY": 0,
+      "inputTop": 4,
+      "inputs": [
+        {
+          "key": "[\"name\",\"image\",0]",
+          "x": 10,
+          "y": 14,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"folder\",0]",
+          "x": 10,
+          "y": 34,
+          "height": 48
+        },
+        {
+          "key": "[\"name\",\"filename\",0]",
+          "x": 10,
+          "y": 82,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"overwrite\",0]",
+          "x": 10,
+          "y": 106,
+          "height": 24
+        }
+      ],
+      "outputs": [],
+      "freeHeight": 0
+    },
+    {
+      "id": "51",
+      "pos": [
+        1481.5208785107595,
+        -2279.9683957217485
+      ],
+      "size": [
+        202.68011702785998,
+        246
+      ],
+      "selected": true,
+      "titleHeight": 30,
+      "startY": 0,
+      "inputTop": 4,
+      "inputs": [
+        {
+          "key": "[\"name\",\"images\",0]",
+          "x": 10,
+          "y": 14,
+          "height": 20
+        }
+      ],
+      "outputs": [
+        {
+          "key": "[\"name\",\"images\",0]",
+          "x": 193.68011702785998,
+          "y": 14,
+          "height": 20
+        }
+      ],
+      "freeHeight": 0
+    },
+    {
+      "id": "53",
+      "pos": [
+        1481.5208785107595,
+        -4200.087343696713
+      ],
+      "size": [
+        357.18445726720984,
+        461.5479748494222
+      ],
+      "selected": true,
+      "titleHeight": 30,
+      "startY": 0,
+      "inputTop": 4,
+      "inputs": [
+        {
+          "key": "[\"name\",\"content\",0]",
+          "x": 10,
+          "y": 14,
+          "height": 20
+        }
+      ],
+      "outputs": [],
+      "freeHeight": 435.5479748494222
+    },
+    {
+      "id": "55",
+      "pos": [
+        271.68272345068226,
+        -2444.9683957217485
+      ],
+      "size": [
+        301.3400585139318,
+        332.8040351083591
+      ],
+      "selected": true,
+      "titleHeight": 30,
+      "startY": 0,
+      "inputTop": 4,
+      "inputs": [
+        {
+          "key": "[\"name\",\"image\",0]",
+          "x": 10,
+          "y": 14,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"upload\",0]",
+          "x": 10,
+          "y": 38,
+          "height": 24
+        }
+      ],
+      "outputs": [
+        {
+          "key": "[\"name\",\"IMAGE\",0]",
+          "x": 292.3400585139318,
+          "y": 14,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"MASK\",0]",
+          "x": 292.3400585139318,
+          "y": 34,
+          "height": 20
+        }
+      ],
+      "freeHeight": 238.80403510835907
+    },
+    {
+      "id": "57",
+      "pos": [
+        -152.31727654931774,
+        -3804.539368847291
+      ],
+      "size": [
+        400,
+        710
+      ],
+      "selected": true,
+      "titleHeight": 30,
+      "startY": 0,
+      "inputTop": 0,
+      "inputs": [
+        {
+          "key": "[\"name\",\"texts.text1\",0]",
+          "x": 10,
+          "y": 10,
+          "height": 164
+        },
+        {
+          "key": "[\"name\",\"texts.text2\",0]",
+          "x": 10,
+          "y": 174,
+          "height": 164
+        },
+        {
+          "key": "[\"name\",\"texts.text3\",0]",
+          "x": 10,
+          "y": 338,
+          "height": 164
+        },
+        {
+          "key": "[\"name\",\"texts.text4\",0]",
+          "x": 10,
+          "y": 502,
+          "height": 164
+        }
+      ],
+      "outputs": [
+        {
+          "key": "[\"name\",\"文本1\",0]",
+          "x": 391,
+          "y": 10,
+          "inputAnchor": 0,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"文本2\",0]",
+          "x": 391,
+          "y": 338,
+          "inputAnchor": 1,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"文本3\",0]",
+          "x": 391,
+          "y": 502,
+          "inputAnchor": 2,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"文本4\",0]",
+          "x": 391,
+          "y": 174,
+          "inputAnchor": 3,
+          "height": 20
+        }
+      ],
+      "freeHeight": 24
+    },
+    {
+      "id": "59",
+      "pos": [
+        258.51076548635035,
+        -3852.869408034695
+      ],
+      "size": [
+        327.6839744425956,
+        59.31099941914988
+      ],
+      "selected": true,
+      "titleHeight": 30,
+      "startY": 0,
+      "inputTop": 4,
+      "inputs": [
+        {
+          "key": "[\"name\",\"value\",0]",
+          "x": 10,
+          "y": 14,
+          "height": 24
+        }
+      ],
+      "outputs": [
+        {
+          "key": "[\"name\",\"STRING\",0]",
+          "x": 318.6839744425956,
+          "y": 14,
+          "height": 20
+        }
+      ],
+      "freeHeight": 0
+    },
+    {
+      "id": "60",
+      "pos": [
+        -57.31727654931774,
+        -4021.478071112579
+      ],
+      "size": [
+        210,
+        102.32942968115356
+      ],
+      "selected": true,
+      "titleHeight": 30,
+      "startY": 0,
+      "inputTop": 4,
+      "inputs": [],
+      "outputs": [],
+      "freeHeight": 100.32942968115356
+    },
+    {
+      "id": "61",
+      "pos": [
+        1015.1148964998209,
+        -2444.9683957217485
+      ],
+      "size": [
+        331.2412680330119,
+        576
+      ],
+      "selected": true,
+      "titleHeight": 30,
+      "startY": 0,
+      "inputTop": 4,
+      "inputs": [
+        {
+          "key": "[\"name\",\"images.输入图像1\",0]",
+          "x": 10,
+          "y": 14,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"images.输入图像2\",0]",
+          "x": 10,
+          "y": 34,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"images.输入图像3\",0]",
+          "x": 10,
+          "y": 54,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"known_mask\",0]",
+          "x": 10,
+          "y": 74,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"prompt\",0]",
+          "x": 10,
+          "y": 94,
+          "height": 58
+        },
+        {
+          "key": "[\"name\",\"model\",0]",
+          "x": 10,
+          "y": 152,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"size\",0]",
+          "x": 10,
+          "y": 176,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"timeout_seconds\",0]",
+          "x": 10,
+          "y": 200,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"quality\",0]",
+          "x": 10,
+          "y": 224,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"fixed_reference\",0]",
+          "x": 10,
+          "y": 248,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"max_concurrency\",0]",
+          "x": 10,
+          "y": 272,
+          "height": 24
+        },
+        {
+          "key": "[\"name\",\"force_regenerate\",0]",
+          "x": 10,
+          "y": 296,
+          "height": 24
+        }
+      ],
+      "outputs": [
+        {
+          "key": "[\"name\",\"IMAGE\",0]",
+          "x": 322.2412680330119,
+          "y": 14,
+          "height": 20
+        }
+      ],
+      "freeHeight": 264
+    },
+    {
+      "id": "62",
+      "pos": [
+        597.0227819646141,
+        -2376.9683957217485
+      ],
+      "size": [
+        394.09211453520686,
+        290
+      ],
+      "selected": true,
+      "titleHeight": 30,
+      "startY": 0,
+      "inputTop": 4,
+      "inputs": [
+        {
+          "key": "[\"name\",\"pixels\",0]",
+          "x": 10,
+          "y": 14,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"image\",0]",
+          "x": 10,
+          "y": 34,
+          "height": 20
+        }
+      ],
+      "outputs": [
+        {
+          "key": "[\"name\",\"图像\",0]",
+          "x": 385.09211453520686,
+          "y": 14,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"蒙版\",0]",
+          "x": 385.09211453520686,
+          "y": 34,
+          "height": 20
+        }
+      ],
+      "freeHeight": 24
+    },
+    {
+      "id": "63",
+      "pos": [
+        321.06173708264816,
+        -3664.539368847291
+      ],
+      "size": [
+        202.58203125,
+        86
+      ],
+      "selected": true,
+      "titleHeight": 30,
+      "startY": 0,
+      "inputTop": 4,
+      "inputs": [
+        {
+          "key": "[\"name\",\"text\",0]",
+          "x": 10,
+          "y": 14,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"separator\",0]",
+          "x": 10,
+          "y": 34,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"text_1\",0]",
+          "x": 10,
+          "y": 54,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"text_2\",0]",
+          "x": 10,
+          "y": 74,
+          "height": 20
+        }
+      ],
+      "outputs": [
+        {
+          "key": "[\"name\",\"字符串数组\",0]",
+          "x": 193.58203125,
+          "y": 14,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"字符串数组_1\",0]",
+          "x": 193.58203125,
+          "y": 34,
+          "height": 20
+        },
+        {
+          "key": "[\"name\",\"字符串数组_2\",0]",
+          "x": 193.58203125,
+          "y": 54,
+          "height": 20
+        }
+      ],
+      "freeHeight": 0
+    },
+    {
+      "id": "64",
+      "pos": [
+        -57.31727654931774,
+        -689.9683957217484
+      ],
+      "size": [
+        210,
+        102.32942968115356
+      ],
+      "selected": true,
+      "titleHeight": 30,
+      "startY": 0,
+      "inputTop": 4,
+      "inputs": [],
+      "outputs": [],
+      "freeHeight": 100.32942968115356
+    }
+  ],
+  "edges": [
+    {
+      "id": "4",
+      "source": "5",
+      "target": "9",
+      "output": 0,
+      "input": 1
+    },
+    {
+      "id": "23",
+      "source": "22",
+      "target": "31",
+      "output": 0,
+      "input": 0
+    },
+    {
+      "id": "24",
+      "source": "22",
+      "target": "32",
+      "output": 0,
+      "input": 0
+    },
+    {
+      "id": "26",
+      "source": "31",
+      "target": "33",
+      "output": 0,
+      "input": 0
+    },
+    {
+      "id": "33",
+      "source": "17",
+      "target": "37",
+      "output": 0,
+      "input": 0
+    },
+    {
+      "id": "34",
+      "source": "17",
+      "target": "38",
+      "output": 0,
+      "input": 0
+    },
+    {
+      "id": "35",
+      "source": "37",
+      "target": "39",
+      "output": 0,
+      "input": 0
+    },
+    {
+      "id": "60",
+      "source": "5",
+      "target": "53",
+      "output": 0,
+      "input": 0
+    },
+    {
+      "id": "80",
+      "source": "61",
+      "target": "51",
+      "output": 0,
+      "input": 0
+    },
+    {
+      "id": "81",
+      "source": "55",
+      "target": "62",
+      "output": 0,
+      "input": 0
+    },
+    {
+      "id": "85",
+      "source": "57",
+      "target": "63",
+      "output": 0,
+      "input": 0
+    },
+    {
+      "id": "86",
+      "source": "57",
+      "target": "63",
+      "output": 3,
+      "input": 1
+    },
+    {
+      "id": "87",
+      "source": "57",
+      "target": "63",
+      "output": 1,
+      "input": 2
+    },
+    {
+      "id": "88",
+      "source": "57",
+      "target": "63",
+      "output": 2,
+      "input": 3
+    },
+    {
+      "id": "62",
+      "source": "19",
+      "target": "17",
+      "output": 0,
+      "input": 0
+    },
+    {
+      "id": "84",
+      "source": "61",
+      "target": "17",
+      "output": 0,
+      "input": 1
+    },
+    {
+      "id": "14",
+      "source": "18",
+      "target": "19",
+      "output": 0,
+      "input": 0
+    },
+    {
+      "id": "32",
+      "source": "17",
+      "target": "22",
+      "output": 0,
+      "input": 0
+    },
+    {
+      "id": "82",
+      "source": "55",
+      "target": "61",
+      "output": 0,
+      "input": 0
+    },
+    {
+      "id": "83",
+      "source": "62",
+      "target": "61",
+      "output": 0,
+      "input": 1
+    },
+    {
+      "id": "89",
+      "source": "63",
+      "target": "5",
+      "output": 0,
+      "input": 0
+    },
+    {
+      "id": "92",
+      "source": "63",
+      "target": "5",
+      "output": 1,
+      "input": 1
+    },
+    {
+      "id": "93",
+      "source": "63",
+      "target": "5",
+      "output": 2,
+      "input": 2
+    },
+    {
+      "id": "94",
+      "source": "59",
+      "target": "5",
+      "output": 0,
+      "input": 3
+    },
+    {
+      "id": "16",
+      "source": "9",
+      "target": "17",
+      "output": 0,
+      "input": 4
+    }
+  ]
+}

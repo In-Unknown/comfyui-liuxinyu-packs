@@ -12,9 +12,10 @@ const context = vm.createContext({app,LiteGraph,console,structuredClone,queueMic
   api:{fetchApi:async (...args)=>handler(...args)}});
 const source = name => fs.readFileSync(path.join(__dirname,'..',name),'utf8').replace(/^import .*;\r?$/gm,'').replace(/^export /gm,'');
 vm.runInContext(source('port_order.js'),context);
+vm.runInContext(source('menu_order.js'),context);
 vm.runInContext(source('menu_source.js'),context);
 vm.runInContext(source('graph_layout.js').replace('const PROPERTY = "liuxinyu_port_order";','')+
-  '\nglobalThis.layoutTest = {snapshot,apply,restore,checkpoint,arrangeSelected,layoutFingerprint,request};',context);
+  '\nglobalThis.layoutTest = {snapshot,apply,restore,checkpoint,arrangeSelected,layoutFingerprint,request,rankedChoices};',context);
 const helpers = context.layoutTest;
 const graph = {_nodes:[],links:new Map(),beforeChange(){events.push('before');},afterChange(){events.push('after');},change(){events.push('change');},
   extra:{ds:{scale:1,offset:[0,0]}},
@@ -127,6 +128,7 @@ const plan={status:'ok',nodes:[{id:'1',pos:[0,100],inputs:[1,0],outputs:[0]},
   assert.deepEqual(events,['before','change','after']);
   assert.deepEqual(clone(a.pos),[0,100]);
   assert.deepEqual(clone(outside.pos),[-400,0]);
+  assert(messages.at(-1).includes('本次仅找到 1 个'),'single candidate explicitly explains the absence of a chooser');
   assert.deepEqual(clone([...graph.links.values()]),before.links);
   // ComfyUI exposes existing properties and nested order arrays through proxies.
   // A first run with no order property did not exercise this browser case.
@@ -206,7 +208,7 @@ const plan={status:'ok',nodes:[{id:'1',pos:[0,100],inputs:[1,0],outputs:[0]},
   await helpers.arrangeSelected();
   assert.equal(requests,1);
   assert.deepEqual(clone(graph.serialize()),before);
-  const ext=extensions.find(e=>e.name==='liuxinyu.GraphLayout');
+  const ext=extensions.find(e=>e.name==='liuxinyu.MenuSource');
   assert.equal(ext.getCanvasMenuItems()[0].content,'整理节点');
   assert.equal(ext.getNodeMenuItems()[0].content,'整理节点');
   assert.equal(ext.getCanvasMenuItems()[0].className,'liuxinyu-menu-source');
@@ -234,5 +236,123 @@ const plan={status:'ok',nodes:[{id:'1',pos:[0,100],inputs:[1,0],outputs:[0]},
   assert.deepEqual(clone(graph.serialize()),before);
   assert.equal(panels.at(-1).removed,true);
   assert(messages.at(-1).includes('已取消'));
+  const timers=new Set();
+  context.setInterval=callback=>{timers.add(callback);return callback;};
+  context.clearInterval=callback=>timers.delete(callback);
+  context.window={innerWidth:1200,innerHeight:900};
+  context.document.createElement=tag=>({
+    tag,style:{},children:[],attributes:{},
+    setAttribute(key,value){this.attributes[key]=value;},
+    append(...items){this.children.push(...items);},remove(){this.removed=true;},
+    getBoundingClientRect(){return {left:900,top:600};},setPointerCapture(id){this.pointer=id;},
+  });
+  const otherPlan=clone(plan.nodes);
+  otherPlan[0].pos=[0,-100];otherPlan[1].pos=[500,-100];
+  otherPlan[0].inputs=[0,1];
+  const tiedPlan={...plan,candidates:[{nodes:plan.nodes},{nodes:otherPlan}]};
+  const zero={crossings:0,nodeIntersections:0,overlaps:0};
+  let verifyCount=0;
+  handler=async(url,opts)=>{
+    const payload=JSON.parse(opts.body);
+    if(payload.verify){verifyCount++;assert.deepEqual(clone(graph.serialize()),before,'each trial restored before yielding');}
+    return {ok:true,json:async()=>payload.verify?{status:'ok',checks:zero,cost:100}:tiedPlan};
+  };
+  events.length=0;
+  await helpers.arrangeSelected();
+  assert.equal(verifyCount,2);
+  const picker=panels.at(-1),header=picker.children[0],options=picker.children[1].children;
+  assert.equal(picker.attributes.role,'region');
+  assert.equal(picker.attributes['aria-modal'],undefined);
+  assert.equal(options.length,3);
+  assert.equal(options[0].textContent,'方案 1（推荐）');
+  assert.equal(options[1].textContent,'方案 2（↓0.0%）');
+  assert(options[1].title.includes('分数越低越好'));
+  assert.equal(options[0].attributes['aria-pressed'],'true');
+  assert.deepEqual(clone(a.pos),[0,100],'default candidate is immediately displayed');
+  assert.equal(events.length,3);
+  let focusPrevented=false;
+  options[1].onpointerdown({preventDefault(){focusPrevented=true;}});
+  assert(focusPrevented,'clicking a choice preserves canvas focus');
+  assert.equal(options[1].tabIndex,-1);
+  assert.equal(options[1].onkeydown,undefined,'no keyboard interception');
+  options[1].onclick();
+  assert.deepEqual(clone(a.pos),[0,-100]);
+  assert.equal(options[1].attributes['aria-pressed'],'true');
+  assert.equal(events.length,6,'switch uses a closed native undo transaction');
+  assert.equal(b.inputs[1].link,1);
+  assert.deepEqual(clone([...graph.links.values()]),before.links);
+  options[0].onclick();
+  assert.deepEqual(clone(a.pos),[0,100]);
+  assert.deepEqual(clone(a.size),[200,80],'repeated previews do not accumulate size');
+  header.onpointerdown({button:0,pointerId:4,clientX:920,clientY:615,preventDefault(){}});
+  header.onpointermove({pointerId:4,clientX:720,clientY:415});
+  assert.equal(picker.style.left,'700px');assert.equal(picker.style.top,'400px');
+  header.onpointerup();
+  header.onpointermove({pointerId:4,clientX:320,clientY:115});
+  assert.equal(picker.style.left,'700px','drag ends on pointer release');
+  graph.extra.ds={scale:.6,offset:[200,50]};
+  for(const tick of timers)tick();
+  assert(!picker.removed,'zoom and pan retain candidate chooser');
+  const applied=clone(graph.serialize());
+  const eventCount=events.length;
+  options.at(-1).onclick();
+  assert(picker.removed);assert.equal(timers.size,0);
+  assert.deepEqual(clone(graph.serialize()),applied,'confirm retains current layout');
+  assert.equal(events.length,eventCount,'confirm adds no empty undo entry');
+  helpers.restore(saved);graph.extra=structuredClone(before.extra);events.length=0;
+  await helpers.arrangeSelected();
+  const stale=panels.at(-1);
+  a.pos[0]=75;
+  for(const tick of timers)tick();
+  assert(stale.removed,'editing or undo invalidates alternatives');
+  assert.equal(a.pos[0],75,'invalidation never rolls back user edits');
+  assert.equal(timers.size,0);
+  helpers.restore(saved);events.length=0;
+  await helpers.arrangeSelected();
+  const switchedGraph=panels.at(-1);
+  app.canvas.graph={};
+  for(const tick of timers)tick();
+  assert(switchedGraph.removed,'changing workflow or subgraph dismisses chooser');
+  app.canvas.graph=graph;
+  helpers.restore(saved);events.length=0;
+  await helpers.arrangeSelected();
+  const rebuiltPicker=panels.at(-1);
+  graph._nodes[0]=Object.assign(Object.create(Object.getPrototypeOf(a)),a);
+  for(const tick of timers)tick();
+  assert(rebuiltPicker.removed,'reloaded node instances invalidate old handles even with identical geometry');
+  graph._nodes[0]=a;
+  helpers.restore(saved);events.length=0;
+  const actualDifferent=[{nodes:plan.nodes,result:{checks:zero,cost:100}},
+    {nodes:otherPlan,result:{checks:zero,cost:115}},
+    {nodes:otherPlan,result:{checks:zero,cost:115.1}},
+    {nodes:otherPlan,result:{checks:{...zero,crossings:1},cost:1}}];
+  assert.equal(helpers.rankedChoices(actualDifferent).length,2,'actual measurements decide equivalence');
+  const reverseRanked=helpers.rankedChoices([...actualDifferent].reverse());
+  assert.equal(reverseRanked[0].result.cost,100,'rank by score regardless of candidate arrival order');
+  assert.equal(reverseRanked[1].result.cost,115,'keep a genuinely different score within the allowed range');
+  assert.equal(helpers.rankedChoices(Array(8).fill(actualDifferent[0])).length,5);
+  verifyCount=0;
+  handler=async(url,opts)=>({ok:true,json:async()=>JSON.parse(opts.body).verify?
+    {status:'ok',checks:zero,cost:++verifyCount===1?100:120}:tiedPlan});
+  await helpers.arrangeSelected();
+  assert.equal(timers.size,0,'one actual best choice does not open a chooser');
+  assert.deepEqual(clone(a.pos),[0,100]);
+  assert(messages.at(-1).includes('搜索保留 2 个候选，实际端口复核后仅保留 1 个'));
+  const fixedChoice={nodes:plan.nodes,preservesPortOrder:true,result:{checks:zero,cost:150}};
+  assert.equal(helpers.rankedChoices([actualDifferent[0],fixedChoice])[0],fixedChoice,
+    'actual zero-conflict fixed-order plan outranks a cheaper reordered plan');
+  helpers.restore(saved);events.length=0;
+  const keepPlan={status:'ok',preservesPortOrder:true,nodes:clone(plan.nodes)};
+  keepPlan.nodes.forEach(n=>{n.inputs=[0,1];});
+  const keepProperties=[clone(a.properties),clone(b.properties)];
+  handler=async(url,opts)=>({ok:true,json:async()=>JSON.parse(opts.body).verify?
+    {status:'ok',checks:zero,cost:100}:keepPlan});
+  await helpers.arrangeSelected();
+  assert.deepEqual([clone(a.properties),clone(b.properties)],keepProperties,'position-only layout does not write port order properties');
+  assert.deepEqual(clone([...graph.links.values()]),before.links);
+  assert.equal(events.length,3);
+  assert(messages.at(-1).includes('已保留原端口顺序'));
+  assert.throws(()=>helpers.apply([a,b],plan.nodes,true),/端口顺序/,'reject a falsely labelled fixed-order plan');
   console.log('PASS: menu, original ports, outside nodes, trial restore, undo transaction, zoom/pan, harmless properties, actual movement, failed verification, network failure, fixed boundaries, chunked UTF-8 progress, cancel panel');
+  console.log('PASS: tied candidate verification, instant switching, focus preservation, draggable nonmodal chooser, confirm, invalidation and cleanup');
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -1,4 +1,25 @@
 import { app } from "../../scripts/app.js";
+import { MENU_ORDER } from "./menu_order.js";
+
+const menuProviders = new Map();
+
+// Factories run when the menu opens, so selection and busy states stay current.
+export function registerMenuItem(id, providers) {
+  if (menuProviders.has(id)) throw new Error(`重复的 liuxinyu 菜单 ID：${id}`);
+  menuProviders.set(id, providers);
+}
+
+function collectMenuItems(context, args) {
+  const ids = [...new Set(MENU_ORDER)];
+  // Newly registered items remain deterministic even before their ID is listed.
+  ids.push(...[...menuProviders.keys()].filter(id => !ids.includes(id)).sort());
+  const items = [];
+  for (const id of ids) {
+    const item = menuProviders.get(id)?.[context]?.(...args);
+    if (item) items.push(item);
+  }
+  return sourceMenuItems(items);
+}
 
 // Mark only entries created by this package; keep their text and callbacks intact.
 export function sourceMenuItems(items) {
@@ -10,6 +31,8 @@ export function sourceMenuItems(items) {
 
 app.registerExtension({
   name: "liuxinyu.MenuSource",
+  getCanvasMenuItems(...args) { return collectMenuItems("canvas", args); },
+  getNodeMenuItems(...args) { return collectMenuItems("node", args); },
   setup() {
     if (document.getElementById("liuxinyu-menu-source-style")) return;
     const style = document.createElement("style");

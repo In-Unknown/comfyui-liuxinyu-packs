@@ -1,6 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { sourceMenuItems } from "./menu_source.js";
+import { registerMenuItem } from "./menu_source.js";
 
 function readJSON(key) {
   try {
@@ -62,8 +62,8 @@ function chooseFileVersion(path, savedAt, modified, manual = false) {
 }
 
 async function finishLoadFrames() {
-  // Native applyMatchType (dynamicWidgets.ts) initializes in rAF, AFTER
-  // loadGraphData resolves. Its connection notifications also enqueue
+  // Native applyMatchType (dynamicWidgets.ts) initializes in rAF, after
+  // synchronous graph configuration. Its connection notifications also enqueue
   // microtasks (e.g. StructuredDataTypes). The following frame is a barrier
   // after those callbacks, including callbacks registered during that frame.
   await new Promise(requestAnimationFrame);
@@ -385,11 +385,16 @@ app.registerExtension({
     }, 5000);
   },
   beforeLoadGraph() { beforeLoad(); },
+  // ComfyUI awaits this hook BEFORE afterLoadNewGraph snapshots its baseline.
+  // Waiting here fixes ordinary open/refresh too, without resetting a tracker,
+  // clearing a draft, or treating subsequent user edits as already saved.
+  afterConfigureGraph() { return finishLoadFrames(); },
   afterLoadGraph() { afterLoad(); },
-  getCanvasMenuItems() {
-    return sourceMenuItems([
-      ...(manualCheck ? [{ content: "检查/同步后端工作流文件", callback: () => manualCheck() }] : []),
-      { content: "查看未保存差异", callback: showUnsavedDifferences },
-    ]);
-  },
+});
+
+registerMenuItem("workflow-sync", {
+  canvas: () => manualCheck ? { content: "检查/同步后端工作流文件", callback: () => manualCheck() } : null,
+});
+registerMenuItem("workflow-differences", {
+  canvas: () => ({ content: "查看未保存差异", callback: showUnsavedDifferences }),
 });
