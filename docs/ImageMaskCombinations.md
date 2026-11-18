@@ -1,18 +1,42 @@
-# Image Mask Combinations
+# 遮罩区域图片排列组合
 
-ImageMaskCombinations takes multiple equally-sized candidate images and one mask, then enumerates every ordered pair `(i, j)`: image i is used as the base while image j is pasted into the white area of the mask (black keeps the base, grayscale blends by opacity). It outputs a batch containing every composite, together with a string list of combination indices aligned one-to-one with the output batch. It is useful after generating several candidates for the same frame, to exhaustively explore local-region replacements and pick the best parts from each candidate.
+输入同尺寸候选图与遮罩，枚举“底图 i＋贴入图 j”的所有有序组合，适合在同一画面的一块区域中比较不同候选。白色遮罩使用贴入图，黑色保留底图，灰色按透明度混合。
 
-## Inputs
+节点 ID：`ImageMaskCombinations`；分类：`image/compositing`。
 
-| Field | Description | Data type |
+## 输入
+
+| 参数 | 描述 | 数据类型 | 必需 |
+| --- | --- | --- | --- |
+| `候选图片` | 动态图片输入，内部编号 image0、image1……；第一个端口必需，连接后增加可选端口，最多 50 个。每口可接单图或批次，按端口编号、批次内部顺序合并。当前执行实现要求至少两个非空连接来源，合并后至少两张图，全部尺寸一致 | IMAGE | 是；后续动态口可选 |
+| `遮罩` | 白色替换、黑色保留、灰色混合；尺寸不同时以最近邻缩放；遮罩批次只取第一张 | MASK | 是 |
+| `包含自身组合` | 默认 false；关闭时排除 i=j，开启时包含原图自身的对照组合 | BOOLEAN | 是（控件有默认值） |
+
+## 输出
+
+| 输出名称 | 描述 | 数据类型 |
 | --- | --- | --- |
-| `images` | Auto-growing image inputs. The first socket is required (filled); each time you connect one, a new optional socket (hollow) appears below it, up to 50. Each socket accepts a single image or an image batch; all images are flattened into one candidate sequence numbered from 0. All images must have the same size. | `IMAGE` |
-| `mask` | Compositing mask. White marks the region replaced by the patch image, black keeps the base image, grayscale produces opacity blending. If the mask size differs from the images it is resized with nearest-neighbor sampling; the first mask of a mask batch is used. | `MASK` |
-| `include_self` | When off (default), outputs N×(N-1) combinations, excluding `i=j` pairs which are identical to the original images. When on, outputs N×N combinations; the diagonal entries are the untouched candidates and serve as a baseline. | `BOOLEAN` |
+| `合成图片` | 所有组合构成一个 IMAGE 批次，先按底图编号、再按贴入图编号排列 | IMAGE |
+| `组合索引` | 与批次逐张对应的字符串执行列表，如 0->2。编号从 0 开始；这不是一个整体 ARRAY | STRING（执行列表） |
 
-## Outputs
+## 直接照做：三张候选替换同一区域
 
-| Field | Description | Data type |
-| --- | --- | --- |
-| `images` | Batch of all composites, ordered row-first: base index i first, patch index j second. | `IMAGE` |
-| `indices` | String list aligned one-to-one with the output batch, formatted as `base->patch`, e.g. `0->2` means candidate 0 is the base and candidate 2 is pasted into the mask region. | `STRING` (list) |
+1. 将三张同尺寸图片 A、B、C 依次接入候选图片输入。
+2. 将要替换的区域涂白、其余涂黑，接入遮罩。
+3. 关闭 `包含自身组合`，把合成图片接预览并运行。
+4. 得到 6 张图片，索引顺序为 `0->1、0->2、1->0、1->2、2->0、2->1`。例如第 1 张以 A 为底，白色区域使用 B。
+5. 开启自身组合后得到 9 张，顺序从 `0->0` 到 `2->2`，包含三张原图对照。
+
+## 数量、顺序与执行语义
+
+N 张候选关闭自身组合时输出 N×(N−1) 张，开启时输出 N×N 张。合成图片仍作为一个完整图片批次传递；组合索引是逐项执行的字符串输出，不应假设连接两个输出后下游就自动逐张配对。需要逐张处理时，应显式拆分图片批次并按对应顺序使用索引。
+
+## 遮罩与边界
+
+遮罩允许二维 H×W 或三维 B×H×W，三维只使用第一张；值会限制在 0～1。缩放使用最近邻，图片本身不在这里缩放。全黑得到各底图，全白得到各贴入图；自身组合不改变图像。
+
+## 常见问题与限制
+
+- 少于两个连接来源会报错，即使一个来源内含多图批次也不能替代第二个连接；这是当前执行实现的限制。
+- 合并后少于两张图、图片尺寸不一致或遮罩维度不符合要求时无法执行。
+- 结果数量随 N 的平方增长，大批量输入会占用较多内存；节点一次生成整个组合批次。

@@ -15,6 +15,7 @@ from comfy_execution.graph_utils import ExecutionBlocker
 from comfy_extras.nodes_logic import NotNode, SwitchNode
 from logic_node import LiuxinyuRaiseIf
 from structured_data_node import LiuxinyuStructuredTransform as Transform, JSON_TYPES
+from structured_data_node import LiuxinyuCollectExecutionList as Collect
 
 
 class Source(io.ComfyNode):
@@ -45,6 +46,28 @@ class Capture(io.ComfyNode):
 
 
 class StructuredTransformTests(unittest.TestCase):
+    def test_collector_array_contract_and_string_rejection(self):
+        schema = Collect.GET_NODE_INFO_V1()
+        self.assertEqual(schema['output'], ['ARRAY'])
+        self.assertEqual(schema['output_is_list'], [False])
+        for value in ([], [1], [[1, 2], [3]], ['a', 'b']):
+            self.assertEqual(Collect.execute(value).result, (value,))
+
+        class TextSink(Capture):
+            @classmethod
+            def define_schema(cls):
+                return io.Schema(node_id='CollectTextSink', inputs=[io.String.Input('value')],
+                                 outputs=[], is_output_node=True)
+
+        graph = {'collect': {'class_type': 'LiuxinyuCollectExecutionList', 'inputs': {'value': 1}},
+                 'out': {'class_type': 'CollectTextSink', 'inputs': {'value': ['collect', 0]}}}
+        with patch.dict(nodes.NODE_CLASS_MAPPINGS, {
+            'LiuxinyuCollectExecutionList': Collect, 'CollectTextSink': TextSink,
+        }):
+            valid = asyncio.run(execution.validate_prompt('collect-string', graph, None))
+        self.assertFalse(valid[0])
+        self.assertIn('return_type_mismatch', str(valid[3]))
+
     def call(self, value, expression='data0', kind='字典'):
         return Transform.execute({'data0': value}, expression, kind).result
 

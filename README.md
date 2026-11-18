@@ -2,7 +2,7 @@
 
 面向日常工作流的图片、长图、文件路径、字符串、数学和分包子流工具，同时提供工作区文件显示、节点标记、文件同步提示、交互预览、动态端口和虚拟连接等前端功能。适合多目录详情页整理、长图切分与拼接、批次图片挑选保存、提示词组合，以及把多步处理限制在同一个对象范围内。
 
-当前包含 **76 个用户节点**，另有 **7 个由分包与条件循环功能自动创建的内部节点**。下方按用途完整列出名称、用途和节点 ID。中文名称可直接在 ComfyUI 添加节点的搜索框中查找，ID 用于识别 API 工作流和错误报告。
+当前包含 **87 个用户节点**，另有 **8 个由分包、条件循环及表单模板刷新功能自动创建的内部节点**。下方按用途完整列出名称、用途和节点 ID。中文名称可直接在 ComfyUI 添加节点的搜索框中查找，ID 用于识别 API 工作流和错误报告。
 
 ## 阅读导航
 
@@ -24,7 +24,7 @@
 | --- | --- |
 | ComfyUI | 需要较新的后端及配套前端，支持 `comfy_api.latest`、V3 节点、Autogrow 动态输入。分包还使用原生循环边界和执行调度接口，旧版可能无法加载或执行。 |
 | 当前核对环境 | Windows，ComfyUI **0.38.0**（核心提交 `6b747c04`），Python **3.13.14**，PyTorch **2.14.0+cu130**。这是当前核对环境，不是经过兼容性测试得出的最低版本。 |
-| Python 依赖 | 复用 ComfyUI 环境中的 PyTorch、NumPy、Pillow、aiohttp；整理节点还使用环境已有的 NetworkX 和 SciPy（HiGHS 线性规划）。当前包没有独立 `requirements.txt`，正常 ComfyUI 环境无需另装模型或 API SDK；仅「结构化数据变换（JSONata）」需要额外安装 `jsonata-python==0.6.3`。 |
+| Python 依赖 | 复用 ComfyUI 环境中的 PyTorch、NumPy、Pillow、aiohttp；整理节点使用已有的 NetworkX 和 SciPy（HiGHS 线性规划），函数级数分析与高精度计算使用已有的 SymPy、mpmath。新增的 `requirements.txt` 列出「结构化数据变换（JSONata）」所需 `jsonata-python==0.6.3` 和「JSON Schema填写模版」所需 `jsonschema[format]==4.26.0`；请使用 ComfyUI 的 Python 安装，不需另装模型或 API SDK。 |
 | 浏览器 | 使用与 ComfyUI 配套的现代浏览器前端。动态端口、图片预览和遮罩编辑器均依赖前端脚本，更新 JS 后需要刷新浏览器。 |
 | Windows 专用功能 | 文件/目录选择按钮使用 Windows 原生对话框；“排序字符串数组”的中文拼音排序使用 Windows API；“运行cmd命令”调用 `cmd.exe`。 |
 | Linux、macOS、无桌面环境 | 未完成跨平台全量验证，不承诺全功能兼容。可手动输入服务器路径；Windows 选择器、中文拼音排序、cmd 节点不能按 Windows 方式使用。 |
@@ -44,7 +44,13 @@ git clone https://github.com/In-Unknown/comfyui-liuxinyu-packs.git
 
 也可下载 ZIP，解压为 `ComfyUI/custom_nodes/comfyui-liuxinyu-packs`。确认目录中直接包含 `__init__.py`，不要多嵌套一层同名文件夹。目录名建议保持不变，部分公共预览资源按此路径引用。
 
-安装后重启 ComfyUI，再刷新浏览器。搜索“字符串转为字面量”或“预览超长图片”，确认节点已经加载。
+使用 ComfyUI 自己的 Python 安装本包 `requirements.txt`。Windows 便携版在便携版根目录执行：
+
+```powershell
+.\python_embeded\python.exe -m pip install -r .\ComfyUI\custom_nodes\comfyui-liuxinyu-packs\requirements.txt
+```
+
+安装后重启 ComfyUI，再刷新浏览器。搜索“字符串转为字面量”或“JSON Schema填写模版”，确认节点已经加载。
 
 ### 更新
 
@@ -85,21 +91,25 @@ git pull --ff-only
 
 ### 工作区、节点辨认与界面修正
 
+[Shift 准直移动](docs/AxisDrag.md)：拖动节点、多选或组时按住Shift，以本次起点锁定更接近的水平/垂直方向并显示辅助线；提前按Shift则由首次非零移动决定方向。保持组内相对位置，松开Shift立即补回被约束的位移并跟随鼠标恢复自由移动，锁轴优先于松手网格吸附。默认不按Shift保持原生移动。刷新页面生效，无需添加节点。
+
+[活动节点总览](docs/Activity.md)：右侧“工作流总览”的首个“活动”标签，每次执行开始时自动打开，完成或中断后恢复运行前的收起状态或标签；原来就在活动页则保持。发生执行错误或原生打开错误标签时立即让出显示并取消恢复，不覆盖错误界面。集中显示正在运行节点的只读镜像，实时加入／移除、按内容扩展尺寸，点击复用 Ctrl+F 定位；节点对象稳定后持续改变高度时，可用“连续跟踪”开关跟随其底部。经典画布及第三方控件的兼容范围见详细说明。
+
 | 功能 | 在哪里、怎样使用 | 范围与行为 |
 | --- | --- | --- |
 | 画布图片背景 | 右键经典画布空白处 → “画布背景…” | 保持图片比例、空间变化与接缝约束，尽量拉开同图并减少相邻，嵌套支持 0～10 层并在后台计算；支持 GIF 原始帧播放，至少有一张 GIF 时显示 0%～300% 的速度滑条，中点为默认 100%，0% 停止。矢量网格不透明度独立支持 0%～100%；组内背景淡化可调 0%～100%，默认 65%，重叠分组只淡化一次，组外不受影响。使用简约滑条、滚轮微调；拖动立即显示紧凑数值浮层、松开隐藏，悬停圆点 1 秒也可输入；数字采用常规非衬线字体，直接光标编辑，无内部框线。仅图片缩放带与轨道同色的吸附圆点。种子可填写、复制及随机生成，配置相同可填回种子恢复布局。面板无辉光，内部通过间距分组，不给每个按钮描边；使用画布内的普通浮动容器，不触发模态窗口的快捷键阻断，所有键盘事件正常传播。图片副本与配置保存到 ComfyUI 用户目录，支持旧浏览器记录迁移；保存失败静默自动重试，8 次均失败才显示完整诊断。详见[画布图片背景](docs/CanvasBackground.md)。 |
 | 右键菜单固定顺序与来源标签 | 经典画布的本包菜单项右侧显示小号 `liuxinyu` | 覆盖“画布背景…”“整理节点”“视窗回归原点”“检查/同步后端工作流文件”“查看未保存差异”。本包菜单由公共入口按 `menu_order.js` 固定排序，不随加载顺序或忙碌文字变化；以后新增或调整顺序统一编辑此文件。保留原生底色与文字，来源用低调灰蓝色标示；每一条本包选项都显示标签，与其他选项间用细线区分。无需点击、配置或修改工作流；详见[来源标签说明](docs/MenuSource.md)。 |
-| [视窗回归原点](docs/ViewportOrigin.md) | 画布空白处或节点上右键 → “视窗回归原点” | 将当前画布的视窗中心对准图坐标 `(0, 0)`，保留当前缩放比例，按画布尺寸和设备像素比计算平移。子图中仅改变当前子图视窗，无需选择节点。 |
+| [视窗回归原点](docs/ViewportOrigin.md) | 画布空白处或节点上右键 → “视窗回归原点” | 将当前画布的视窗中心对准图坐标 `(0, 0)`，保留当前缩放比例，按扣除分栏与面板遮挡后的实际可见画布及设备像素比计算平移。子图中仅改变当前子图视窗，无需选择节点。 |
 | [按节点 ID 或名称查找](docs/NodeFind.md) | Ctrl+F → 输入 ID 或名称 → Enter 或点击结果 | 搜索当前工作流主图及全部嵌套子图，支持 ID 精确匹配、名称部分匹配和 `771:745:729` 完整路径；多个结果必须选择后跳转。逐层进入后选中、居中并缩放到约 190%，大节点按视窗适配；返回父图或主图时聚焦对应宿主，手动进入其他实例也更新返回路径。输入框内按 ↑ / ↓ 回填历史搜索词，最近 50 条保存在当前浏览器。非模态面板可按 Esc 关闭，不修改节点内容、布局或连线。 |
 | 工作区入口与文件后缀 | 左侧“工作区”按钮；展开目录、查看书签或搜索文件 | 原“工作流”入口及悬停提示、面板标题改为“工作区”，搜索框显示“搜索工作区…”。书签、浏览、搜索结果以及设在侧栏的已打开列表显示真实后缀，例如 `快速设计详情页.json`、`渠道报告系统提示词.md`；不改磁盘文件名。详见[工作区说明](docs/WorkspaceLabels.md)。 |
 | 非工作流文件交给 Windows 打开 | 在工作区单击文件的行或图标 | `.md`、`.txt` 等非 JSON 文件直接交给 Windows 默认程序；JSON 先检查结构，明确是普通数据或报告模板才交给 Windows，全程不新增标签页或切换当前画布。有工作流结构痕迹、语法损坏或判断不明确的 JSON 保留 ComfyUI 原生处理，缺节点、连线错误或运行失败不作为排除依据。书签按钮、目录展开、重命名和右键菜单不触发系统打开。首次添加或更新后端接口需重启后端再刷新页面，详见[判断规则与限制](docs/WorkspaceLabels.md#json-的保守检查规则)。 |
 | 节点 JSON ID 标记 | 节点框外底部左侧，自动显示 `ID: 522` | 对应工作流 JSON 的节点 `id`，方便对照报错和沟通节点位置。覆盖普通节点、子图节点和子图内部节点，折叠后仍绘制标记，复制后跟随新 ID；不改节点标题或数据。 |
 | 原始节点名称标记 | 普通节点标题上方，自动显示节点定义中的原始名称 | 即使将节点标题改成业务说明，也能辨认它实际是哪种节点。适用于具备相应绘制接口的节点，不仅限于本包；子图容器自身不加原始名称标记，子图内部普通节点仍显示。标记会避开已有徽标背景，不覆盖自定义标题。 |
 | 节点端口显示排序 | 选中节点 → 悬浮端口圆点或文字 → 按 ↑ / ↓；子图边界免选中 | 与同侧上下相邻端口交换位置；悬浮时显示快捷键提示，无需右键窗口。普通节点只调整当前悬浮的已选节点；子图内部输入／输出边界直接悬浮即可操作，与外部子图节点双向同步，同一定义的多个实例共用顺序，灰色新增口保持末尾。顺序随工作流保存。端口标签、点击区域与连线落点一起移动，实际索引和连接关系不变。支持经典画布与嵌套子图；带输入框的端口与控件整行移动，多行框按实际高度占位，不重复显示标签。动态文本的标题和编辑框整组移动，正文不因相邻标签贴边而缩窄，输出排序保留各块行间距；文件／目录选择按钮跟随所属输入，键值对交换保留顶部行；虚拟连接通道重新编号时保留原有显示身份。单端口忽略旧排序记录并保持原生控件位置、宽度，避免整数数值框被挤到输出标签旁；没有输入端口的 Note 保持原生文本框布局，旧空排序记录不会导致持续增高；加载时先同步原生端口缓存，避免保存刷新后弹性文本框重复撑高节点。Vue Nodes 模式暂停应用。详见[操作示例、子图同步与保存行为](docs/PortOrder.md)。 |
-| [后台焦点保护](docs/BackgroundFocusGuard.md) | 切换程序、标签页或最小化浏览器时自动生效 | 阻止原生属性编辑框、旧版节点搜索及搜索关闭后的画布回焦；即使失焦过程中 `hasFocus()` 尚未更新，没有明确页面内焦点目标时也不强制回焦。背景数字浮层离开窗口时不聚焦滑条，正常页面内编辑与提交保留。 |
 | [嵌套子图封装保护](docs/SubgraphTransfer.md) | 选择已有子图，再封装成更大的子图时自动生效 | 保留原子图及其后代的内部连线与状态，避免移动过程中被误判为无人引用而清空；支持分组与多子图封装，正常删除的清理行为保持不变。已丢失的连线需另从完整备份恢复。 |
 | 整理节点 | 框选 2～40 个节点 → 右键“整理节点” | 优先保持当前端口顺序，先尝试直连线拉平与中间处理节点向线下避让，仅调整位置寻找零交叉、零穿框、零重叠方案；保序搜索未找到时再尝试换序。找到保序无冲突方案后，即使换序方案更短也优先保序；保留节点、参数和连接关系。按对方实际端口高度排序，结合平面嵌入、小层最少逆序构造和实际尺寸密集排布，并对冲突端口尝试交换；换序时补充独立的较早／较晚密集分层起点，找到第一个零冲突方案后继续比较。复用精确坐标几何缓存并去除重复精修；原有结果之后追加整组坐标约束压缩，保留直线、列对齐和固定障碍，再按真实曲线复核。最终交叉、穿框、重叠各项均不能比整理前增加，未改善则保留原布局。完成原有压缩和居中后，追加按目标输入口顺序拉直、联合移动挡路节点、共同主目标上游归列、同输出口独立下游按输入侧归列及局部收紧；已拉直的主线保持水平。最终水平、垂直均以 24 画布单位间距为目标，按连线绕行与障碍保留必要空隙；无连线 Note 也参与紧凑度评价。依次比较重叠、穿框、交叉及连线长度、端口纵向落差、同目标列偏移与占地；精修不增加三类冲突，实际端口复核仍优于原布局才应用。未找到零冲突时可采用有改善的方案，无改善保持原样。按评分排序，保留冲突数相同、综合代价在第一名 15% 差距内的前 5 个实测方案（小代价至少容许相差 1）；提供最多 5 项的可拖动非模态浮窗，默认应用第一名，其他方案用“↓百分比”标出评分差距；点击立即切换，确定后关闭，不抢焦点、不拦截快捷键。仅有一个合格方案时不开窗，完成提示明确说明原因，并区分搜索只有一个与实际复核后只剩一个。报告前后数量和剩余冲突，可撤销、保存、取消；等待时缩放、平移不会作废结果。支持经典画布样条连线及当前子图层，不调用付费模型。详见[操作示例、检查范围与限制](docs/GraphLayout.md)。 |
 | 节点搜索同步 | 页面初始化、后端重新连接、从浏览器往返缓存恢复页面时自动触发 | 重新获取并注册节点定义，同时更新画布节点注册与现代搜索列表，减少后端已更新而搜索仍旧的情况。后端新增 Python 节点仍须先重启后端；此功能不替代后端加载。 |
+| [窗口恢复与焦点故障取证](docs/FocusDiagnostics.md) | 页面事件触发系统记录；直接调用工具需显式启动 | 保存原始系统跟踪、Edge／Explorer 的恢复／闪烁调用及源码映射。疑似现场独立封存前置记录、后续 30 秒记录、模块映射和压缩去重的相关代码文件；旧现场移入长期目录，不随普通日志轮转删除。已验证跨进程调用、源码归因回归和原进程退出／原文件替换后的证据读取。详见保留内容、磁盘用量及覆盖限制；不代表原始故障已修复。 |
 | 队列进度浮层布局修正 | 顶部出现队列进度浮层时自动生效 | 将进度浮层放在操作栏下方，避免它撑高顶部布局而挤偏画布框选的裁剪区域。只修正界面布局，不改变任务队列的顺序或执行方式。 |
 
 例如把“字符串转为字面量”重命名为“解析本组回复”后，仍可从上方原始名称标记确认节点类型，再通过下方 ID 与工作流文件中的记录对应。
@@ -113,12 +123,12 @@ git pull --ff-only
 | 入口或操作 | 实际效果 |
 | --- | --- |
 | 自动“工作流文件有新变动”提示 | 实际文件修改时间晚于上次前端成功保存时间时提示。切换工作流、后端重连、窗口重新获得焦点时检查；页面可见且没有加载或待处理提示时，每 5 秒检查一次。 |
-| “同步到实际文件” | 重新读取文件，替换当前页面内容，清除该工作流的旧草稿；等待节点初始化完成后以新画布作为已保存基准。此操作不向后端文件写入内容。 |
+| “加载后端文件内容” / “还原为文件内容” | 重新读取文件，替换当前页面内容，清除该工作流的旧草稿；前端保存时间较新时使用还原提示。等待节点初始化完成后以新画布作为已保存基准。此操作不向后端文件写入内容。 |
 | “什么都不做”、关闭提示或按 Esc | 保留当前页面及草稿；同一版文件不再自动提示，文件再次修改后可以再次提示。 |
-| 右键画布空白处 → “检查/同步后端工作流文件” | 读取后端文件，与实时画布比较；一致时提示“无需更新”，不同才询问是否同步。忽略根画布缩放和平移；此前选择过“什么都不做”也可重新检查，确认同步才替换页面。 |
+| 右键画布空白处 → “检查/同步后端工作流文件” | 读取后端文件，与实时画布比较；一致时提示“无需更新”，不同才询问是否加载文件。前端保存时间较新时明确提示“还原为文件内容”。忽略根画布缩放和平移；此前选择过“什么都不做”也可重新检查，确认才替换页面，不写入后端文件。断线时暂停后台请求、重连后补查；失败保留未完成提示，同一故障不重复弹出。错误显示文件、步骤、请求与具体原因，HTTP 错误包含服务端响应。 |
 | 右键画布空白处 → “查看未保存差异” | 对比“已保存基准 → 前端已记录状态”和“前端已记录状态 → 当前画布”，显示变化字段和值；每组最多显示前 60 处，可选中复制。只供定位未保存白点的来源，不保存文件或清除标记。 |
 
-使用例：在外部修改工作流 JSON 后回到浏览器，检查提示中的文件路径，再选择“同步到实际文件”；如果要保留浏览器中尚未保存的编辑，选择“什么都不做”。刚保存后手动检查，内容一致就提示无需更新，不重新加载或清除草稿。没有对应实际文件的临时工作流不检查。自动检测依据文件时间，不是自动合并；外部工具刻意保留或回拨修改时间时，可使用手动检查比较内容。详见[工作流文件变动提示](docs/WorkflowFileSync.md)。
+使用例：在外部修改工作流 JSON 后回到浏览器，检查提示中的文件路径，再选择“加载后端文件内容”；如果要保留浏览器中尚未保存的编辑，选择“什么都不做”。手动检查发现前端保存时间较新时，按钮显示“还原为文件内容”，需确认是否要加载较旧文件。刚保存后手动检查，内容一致就提示无需更新，不重新加载或清除草稿。没有对应实际文件的临时工作流不检查。自动检测依据文件时间，不是自动合并；外部工具刻意保留或回拨修改时间时，可使用手动检查比较内容。详见[工作流文件变动提示](docs/WorkflowFileSync.md)。
 
 ### 文件选择、即时预览与选图保存
 
@@ -158,7 +168,8 @@ git pull --ff-only
 | [多行输入连接后收起](docs/MultilineCollapse.md) | 本包、harness 节点及子图提升的多行输入 | 文本框自己的输入连接后，收起编辑区域并自动缩短节点，只保留带名称的端口行；后续控件上移，断开后恢复原文字。多个文本框独立判断，动态新增、控件替换和重新加载均重新识别。例如模板节点连接 t1 不会隐藏模板框。支持端口排序，动态文本块沿用已有标题行，不重复占位。旧工作流中的已连接空白会收紧；未连接编辑框高度不足则恢复。 |
 | 动态增加文本块 | [动态多块多行字符串](docs/LiuxinyuDynamicMultilineText.md)的“+ 添加下一个输入框” | 每次新增一组文本框和对应输入/输出，最多 100 块；连入上游后收起该块文本框并使用上游值，断开恢复框内文字。块数与文本随工作流保存。 |
 | 数值数组输入增长 | [多个数值组成数组](docs/LiuxinyuNumberArray.md) | 接入末尾输入后追加一个备用口；断开后收掉多余尾部空口，保留中间空位，避免已有输入编号因断线而移动。输入标签按“数值 1、数值 2……”显示。 |
-| 函数采样控件自动生成 | [函数生成精度数列](docs/LiuxinyuFunctionGrid.md)的表达式 | 根据表达式变量生成各自的最小值、最大值、间隔、小数位控件及端口，变量顺序按表达式识别顺序。例如 `sin(x)+y` 对应 `x`、`y` 两组采样参数。 |
+| 任意数组成员类型锁定 | [组装任意为数组](docs/LiuxinyuAnyArray.md) | 成员可选任意类型，但连接后全部输入锁定为同一类型，不同类型拒绝连接；全部断开后恢复任意。动态输入无固定数量上限，输出始终为 ARRAY。 |
+| 函数采样控件自动生成 | [函数生成精度数列](docs/LiuxinyuFunctionGrid.md)的表达式 | 自由变量生成采样参数；嵌套 sum/∑ 的 INF/∞ 索引另生“运行项数”。已保存控件同步恢复；清理旧版隐藏配置端口，避免遮挡最小值等数值端口。十进制文本精确保留 64 位范围；`i 分析` 浮层锚定按钮，使用独立基准尺寸并随画布同比例缩放，按属性展开对象、分类、定量结果、适用范围和证明步骤；官方通知区分“存在发散级数”“存在不确定收敛性的级数”“确定收敛的级数”。 |
 | 排列组合的可视化同位去重规则 | [字符串排列组合](docs/LiuxinyuStringCombinations.md)的输入旁小方框 | 勾选需要参与第一组同位去重的参数；多组规则仍可在参数框填写，如 `t1,t2; t3,t4`。方框是现有规则的编辑入口，不是另起一套过滤规则。 |
 | 键和值的垂直布局 | [组装键值对](docs/LiuxinyuBuildKeyValuePairs.md) | 将键控件放在上方，值输入及输出位于下一行，便于按“先键后值”阅读；不改变键值对数据结构。 |
 | JSONata 的可见类型与连线检查 | [结构化数据变换（JSONata）](docs/LiuxinyuStructuredTransform.md) | 输入标签显示当前 JSON 数据类型，输出随“结果类型”选择显示如 `结果 · ARRAY`；选择类型改变后更新连线类型，不兼容的下游连线会断开。前端端口显示不替代后端对真实结果的校验。 |
@@ -170,9 +181,9 @@ git pull --ff-only
 
 | 功能 | 使用入口 | 前端承担的工作 |
 | --- | --- | --- |
-| 分包子流动态端口 | [分包执行子流回归](docs/LiuxinyuPacketStart.md)与[回归分包子流条件](docs/LiuxinyuPacketEnd.md) | 按实际使用增减数据端口，显示输入/输出的上游类型并传递类型变化；起点的“当前轮次”显示在最后，提交执行时映射回固定后端端口编号。 |
-| 条件回归与透传端口 | [跳回点](docs/LiuxinyuReturnPoint.md)、[条件回归](docs/LiuxinyuConditionalReturn.md)、[忽略](docs/LiuxinyuIgnoreMemoryChecks.md)/[恢复](docs/LiuxinyuRestoreMemoryChecks.md)内存检查节点 | 起点与透传节点按连接增长输入/输出，回归端根据配对句柄同步数据口和类型；加载工作流、改变连线时同步，包括嵌套子图中的节点。循环和内存控制本身仍由后端执行。 |
-| 携包循环配对 | [分包跳回](docs/LiuxinyuPacketReturnStart.md)与[携包条件回归](docs/LiuxinyuPacketReturnEnd.md) | 回归端根据起点句柄生成对应的“处理完成数据”端口、同步类型；没有配对起点时隐藏相关条件控件，避免显示独立于起点的多余备用数据口。 |
+| 分包子流动态端口 | [分包执行·开始](docs/LiuxinyuPacketStart.md)与[分包执行·结束](docs/LiuxinyuPacketEnd.md) | 按实际使用增减数据端口，显示输入/输出的上游类型并传递类型变化；起点的“当前轮次”显示在最后，提交执行时映射回固定后端端口编号。 |
+| 条件循环·结束与透传端口 | [条件循环·开始](docs/LiuxinyuReturnPoint.md)、[条件循环·结束](docs/LiuxinyuConditionalReturn.md)、[忽略](docs/LiuxinyuIgnoreMemoryChecks.md)/[恢复](docs/LiuxinyuRestoreMemoryChecks.md)内存检查节点 | 起点与透传节点按连接增长输入/输出，回归端根据配对句柄同步数据口和类型；加载工作流、改变连线时同步，包括嵌套子图中的节点。循环和内存控制本身仍由后端执行。 |
+| 携包循环配对 | [携包循环·开始](docs/LiuxinyuPacketReturnStart.md)与[携包循环·结束](docs/LiuxinyuPacketReturnEnd.md) | 回归端根据起点句柄生成对应的“处理完成数据”端口、同步类型；没有配对起点时隐藏相关条件控件，避免显示独立于起点的多余备用数据口。 |
 | 同键虚拟连接 | [传入虚拟连接](docs/LiuxinyuVirtualOutput.md)与[传出虚拟连接](docs/LiuxinyuVirtualInput.md) | 同键一个传入端可对应多个传出端，覆盖主图与嵌套子图。空键不显示数据口；填写键后配对，连接时双向同步数量和类型，保留灰色备用口。某通道所有端都断开后才收起，保留其他实际配对。 |
 
 虚拟连接示例：把目录字符串接到一个“传入虚拟连接”，键填 `文档目录`，在多个远端位置添加同键“传出虚拟连接”并连接各自下游。重复传入端会提示并清空新填写的重复键；运行前检查来源重复、缺少来源、使用中的输入缺连及类型冲突，再将配对还原成普通执行依赖。它传递的是上游数据，不是工作流外的可变环境变量。键、端口和本地连线随工作流保存；实际缺口和错误边界见两端帮助页。
@@ -185,6 +196,9 @@ git pull --ff-only
 
 | 源码 | 对应功能 |
 | --- | --- |
+| [axis_drag.js](axis_drag.js) | Shift水平/垂直约束拖动、起点辅助线，覆盖原生节点/组/多选移动；详见[准直移动](docs/AxisDrag.md) |
+| [activity.js](activity.js)、[activity_state.js](activity_state.js)、[activity_view.js](activity_view.js)、[activity_follow.js](activity_follow.js)、[activity.css](activity.css) | 活动标签、执行状态集合、独立只读镜像、连续跟踪及共享节点定位 |
+| [execution_resume.js](execution_resume.js) | 刷新／重连时核对任务，兼容原生运行状态恢复；完整进度快照优先 |
 | [canvas_background.js](canvas_background.js)、[canvas_background.css](canvas_background.css) | 画布图片背景入口与紧凑面板、图片共享边界对齐物理像素消除绘制缝隙、矢量网格、组内淡化、原生快捷键兼容及静默自动保存 |
 | [canvas_background_layout.js](canvas_background_layout.js)、[canvas_background_worker.js](canvas_background_worker.js) | 保比例电路密铺、几何校验、同图分散、最多 10 层嵌套及后台计算 |
 | [canvas_background_storage.js](canvas_background_storage.js) | 用户目录图片副本与配置、旧 IndexedDB 迁移读取、写入超时及错误诊断 |
@@ -193,24 +207,26 @@ git pull --ff-only
 | [node_json_id.js](node_json_id.js)、[original_node_name.js](original_node_name.js) | 节点 ID 与原始名称标记 |
 | [port_order.js](port_order.js) | 悬浮端口后用方向键交换显示顺序、子图边界免选中与内外双向同步、快捷键提示及工作流持久化 |
 | [graph_layout.js](graph_layout.js) | 整理节点菜单、几何快照、进度与取消、实际端口复核和撤销；后端搜索配合 [graph_layout.py](graph_layout.py) |
+| [focus_guard.js](focus_guard.js) | 经典画布与旧式属性框的局部后台焦点保护；与诊断采集并存，范围见[焦点说明](docs/FocusDiagnostics.md#与现有焦点保护的区别) |
+| [canvas_viewport.js](canvas_viewport.js)、[canvas_focus.js](canvas_focus.js) | 统一可见画布区域计算；原生定位、适应视图及自研聚焦入口扣除实际分栏遮挡，保留原有动画与缩放参数 |
 | [viewport_origin.js](viewport_origin.js) | 画布及节点右键“视窗回归原点”，保留缩放比例 |
 | [node_find.js](node_find.js)、[node_find.css](node_find.css) | Ctrl+F 按 ID、名称或完整路径搜索，输入框 ↑／↓ 回填最近 50 条本地历史并恢复草稿，多结果选择、逐层导航、定位缩放及返回父图宿主聚焦 |
 | [menu_source.js](menu_source.js)、[menu_order.js](menu_order.js) | 公共菜单注册与统一输出、独立顺序配置，以及来源标签与分隔样式 |
 | [subgraph_transfer.js](subgraph_transfer.js) | 封装已有子图时保留内部连线与状态，避免移动过程被当成删除最后一个实例 |
-| [focus_guard.js](focus_guard.js) | 页面失焦后阻止原生属性编辑框、旧版搜索与画布回焦路径重新请求焦点 |
 | [search_sync.js](search_sync.js)、[queue_selection_fix.js](queue_selection_fix.js) | 搜索同步与队列浮层布局修正 |
 | [folder_picker.js](folder_picker.js) | 路径选择、即时图片预览、批次选择与保存 |
+| [image_bytes_labels.js](image_bytes_labels.js) | 图像字节节点全部格式分支的中文参数、开关和TIFF压缩选项显示；保持原参数键与工作流兼容，详见[字节专题](docs/ImageBytes.md) |
 | [preview_long_image.js](preview_long_image.js)、[long_preview_tiles.js](long_preview_tiles.js) | 超长图浏览及可见图块加载 |
 | [smooth_preview.js](smooth_preview.js)、[smooth_image_grid.js](smooth_image_grid.js) | 公共清晰度恢复队列与交互图库 |
 | [thumbnail_grid.js](thumbnail_grid.js)、[preview_resize.js](preview_resize.js) | 缩略图布局及预览尺寸拖动入口 |
 | [text_preview.js](text_preview.js)、[object_preview.js](object_preview.js) | 文本表格与对象树预览 |
 | [ratio_paint.js](ratio_paint.js)、[literal_type.js](literal_type.js) | 官方遮罩编辑器接入与字面量类型提示 |
 | [multiline_collapse.js](multiline_collapse.js)、[dynamic_multiline.js](dynamic_multiline.js) | 多行控件收起与动态文本块 |
-| [number_array.js](number_array.js)、[function_grid.js](function_grid.js) | 数值输入增长与函数采样参数 |
+| [number_array.js](number_array.js)、[function_grid.js](function_grid.js) | 数值及任意数组输入增长、任意数组成员类型锁定与函数采样参数 |
 | [string_combinations.js](string_combinations.js)、[key_value_pairs.js](key_value_pairs.js) | 同位去重勾选与键值控件布局 |
 | [structured_data.js](structured_data.js) | JSONata 输入/输出类型同步 |
 | [operator_inputs.js](operator_inputs.js) | 布尔与位运算的一元／二元输入口切换，以及旧比较符号的中文迁移；保留已有生命周期回调 |
-| [packet_tasks.js](packet_tasks.js)、[conditional_loop.js](conditional_loop.js)、[packet_return.js](packet_return.js) | 分包、条件回归、内存控制透传及携包循环端口 |
+| [packet_tasks.js](packet_tasks.js)、[conditional_loop.js](conditional_loop.js)、[packet_return.js](packet_return.js) | 分包、条件循环·结束、内存控制透传及携包循环端口 |
 | [virtual_connections.js](virtual_connections.js) | 虚拟连接配对、端口同步和提交前连线展开 |
 
 ## 全部节点目录
@@ -219,12 +235,13 @@ git pull --ff-only
 
 | 分类 | 数量 | 主要用途 |
 | --- | ---: | --- |
-| [路径、加载与保存](#路径加载与保存9个) | 9 | 查找素材、读取图片、按路径保存图片与文本 |
+| [路径、加载与保存](#路径加载与保存10个) | 10 | 查找素材、读取图片或任意字节、按路径保存图片与文本 |
+| [图像编码与字节](#图像编码与字节4个) | 4 | 张量编码、字节转码、恢复图像与验证提取 |
 | [图片预览、拼接与合成](#图片预览拼接与合成4个) | 4 | 浏览长图、拼图、蒙版与组合 |
 | [长图切分](#长图切分3个) | 3 | 观察切点、检查边界、正式裁切 |
 | [图片信息与像素](#图片信息与像素3个) | 3 | 图像统计、像素读写 |
 | [字符串与模板](#字符串与模板12个) | 12 | 文本拆合、排序、组合及预览 |
-| [类型转换、数组与执行列表](#类型转换数组与执行列表20个) | 20 | JSON 与字段校验、路径读取与插入、类型转换、执行列表收集与结构化变换 |
+| [类型转换、数组与执行列表](#类型转换数组与执行列表26个) | 26 | JSON 与字段校验、路径读取与插入、类型转换、执行列表收集与结构化变换 |
 | [数学与函数采样](#数学与函数采样11个) | 11 | 多输入计算、整数运算与数列 |
 | [比较、布尔与位运算](#比较布尔与位运算3个) | 3 | 下拉选择 Python 运算符，比较得到条件，布尔短路返回原值，位运算保留实际类型 |
 | [分包子流与条件循环](#分包子流与条件循环6个) | 6 | 逐个对象独立处理，或比较数据并按条件反复更新 |
@@ -232,19 +249,31 @@ git pull --ff-only
 | [虚拟连接](#虚拟连接2个) | 2 | 同键一个传入端与多个传出端跨画布和子图配对，运行前还原普通连线，数量与类型双向同步 |
 | [系统命令](#系统命令1个) | 1 | 在 Windows 主机运行 cmd |
 
-### 路径、加载与保存（9个）
+### 路径、加载与保存（10个）
 
 | 节点 | 用途与关键行为 | 节点 ID |
 | --- | --- | --- |
 | [加载路径](docs/LoadPath.md) | 选取文件，输出完整路径、文件名、无后缀文件名及后缀；图片可显示预览。 | `LoadPath` |
 | [加载目录](docs/LoadDirectory.md) | 输入或选择目录，输出完整路径、文件夹名和父目录。 | `LoadDirectory` |
 | [在绝对路径中的相对路径](docs/ResolveRelativePath.md) | 组合根目录与相对路径，处理 `.`、`..`；仅计算路径，不验证文件存在。 | `ResolveRelativePath` |
-| [从目录中匹配路径或目录](docs/MatchPath.md) | 按包含文本、正则或文件属性筛选文件/目录，支持递归；输出路径执行列表。 | `MatchPath` |
+| [从目录中匹配路径或目录](docs/MatchPath.md) | 按包含文本、正则或文件属性筛选文件/目录，支持递归；目录结果按数字自然排序，文件结果保持原顺序，输出路径执行列表。 | `MatchPath` |
 | [从路径加载图片](docs/LoadImageFromPath.md) | 读取单张图片，输出 IMAGE、宽度、高度。 | `LoadImageFromPath` |
 | [从路径加载图像批次](docs/LoadImageBatchFromPath.md) | 读取单文件、目录或多文件 CSV，统一成同尺寸 IMAGE 批次。 | `LoadImageBatchFromPath` |
+| [从路径加载字节数据](docs/LiuxinyuLoadFileBytes.md) | 读取任意文件原始BYTES；支持选文件与内容变化检测，不进行图片解码。 | `LiuxinyuLoadFileBytes` |
 | [保存图像到绝对路径](docs/SaveImageToAbsolutePath.md) | 保存单张或批次，支持覆盖策略；批次写入同名子文件夹。 | `SaveImageToAbsolutePath` |
 | [保存文本到文本文件](docs/LiuxinyuSaveTextFile.md) | 将字符串按 UTF-8 原样保存，任意后缀或无后缀均可；支持目录选择、自动建目录、覆盖或编号，每次执行重新写入。 | `LiuxinyuSaveTextFile` |
 | [从批次中选择保存图片](docs/SaveSelectedFromBatch.md) | 预览并手选，或传入从 0 开始的多选序列；保存时按序号追加文件。 | `SaveSelectedFromBatch` |
+
+### 图像编码与字节（4个）
+
+| 节点 | 用途与关键行为 | 节点 ID |
+| --- | --- | --- |
+| [图像张量编码为图像字节](docs/LiuxinyuEncodeImage.md) | 逐张编码为IMAGE_BYTES；格式切换显示相应参数，支持可选透明遮罩。 | `LiuxinyuEncodeImage` |
+| [图像字节转码](docs/LiuxinyuTranscodeImageBytes.md) | 解码后按参数重编码，同格式也生效；多帧逐帧输出。 | `LiuxinyuTranscodeImageBytes` |
+| [图像字节解码为图像](docs/LiuxinyuDecodeImageBytes.md) | 恢复RGB图像与透明遮罩，逐帧输出执行列表。 | `LiuxinyuDecodeImageBytes` |
+| [字节数据提取图像字节](docs/LiuxinyuExtractImageBytes.md) | 完整验证BYTES；同格式保留原字节，不同格式转码。 | `LiuxinyuExtractImageBytes` |
+
+支持PNG、JPEG、WEBP、BMP、TIFF、GIF及可用时的AVIF。PNG交错与透明度分别控制；图片字节可直接接Harness远程回复、API图片编辑普通口或列表合并口。“保存图像到绝对路径”和“从批次中选择保存图片”的图片口均支持IMAGE和IMAGE_BYTES；字节同格式保存不会再压缩JPEG。普通图像处理先解码。格式参数、动画、透明度、列表及元数据边界见[图像编码与字节数据](docs/ImageBytes.md)。
 
 ### 图片预览、拼接与合成（4个）
 
@@ -290,7 +319,7 @@ git pull --ff-only
 | [预览参数组合或字符串数组](docs/LiuxinyuPreviewText.md) | 表格或文本方式浏览参数组合、字符串列表及单条文本，无输出。 | `LiuxinyuPreviewText` |
 | [预览JS对象或数组](docs/LiuxinyuPreviewJSObject.md) | 树状展开对象/数组，查看类型、下标和值，可复制 JSON，无输出。 | `LiuxinyuPreviewJSObject` |
 
-### 类型转换、数组与执行列表（20个）
+### 类型转换、数组与执行列表（26个）
 
 | 节点 | 用途与关键行为 | 节点 ID |
 | --- | --- | --- |
@@ -298,10 +327,11 @@ git pull --ff-only
 | [字符串转为JS对象](docs/LiuxinyuStringToJSObject.md) | 解析标准 JSON，保留嵌套结构、布尔值和 null，不执行 JavaScript；数组整体输出。 | `LiuxinyuStringToJSObject` |
 | [使用js点符号语句读取对象](docs/LiuxinyuReadJSObjectPath.md) | 用 `a.b[0]`、`[0]`、`["a.b"]` 等路径取值，数组支持 `length`，保留结果类型。 | `LiuxinyuReadJSObjectPath` |
 | [js对象转换为字符串](docs/LiuxinyuJSObjectToString.md) | 字符串原样返回，对象、数组和参数组合转 JSON 文本，保留中文和结构。 | `LiuxinyuJSObjectToString` |
-| [数字转换](docs/LiuxinyuNumberConvert.md) | 将数字、布尔值、数字字符串或一维数组转为浮点数及整数，数组逐项输出。 | `LiuxinyuNumberConvert` |
+| [数字转换](docs/LiuxinyuNumberConvert.md) | 将单个数字、布尔值或数字字符串转为单个浮点数及整数；输入口仅接受标量类型，不接受或展开数组，执行列表由原生机制逐项转换。 | `LiuxinyuNumberConvert` |
 | [数字转换为字符串](docs/LiuxinyuNumberToString.md) | 将数字转为文本，不额外做四舍五入或补零。 | `LiuxinyuNumberToString` |
 | [任意转换为字符串](docs/LiuxinyuAnyToString.md) | 使用 Python `str()` 将任意输入转为文本，字符串原样返回。 | `LiuxinyuAnyToString` |
 | [多个数值组成数组](docs/LiuxinyuNumberArray.md) | 将动态数值输入组成完整数组；全为整数则保留整数，混入浮点数则统一为浮点数。 | `LiuxinyuNumberArray` |
+| [组装任意为数组](docs/LiuxinyuAnyArray.md) | 任选一种成员类型，动态输入全部限制为该类型；按编号组成完整 ARRAY，不混合类型、不转换、不展开嵌套。 | `LiuxinyuAnyArray` |
 | [批量任意为执行列表](docs/LiuxinyuRepeatAnyToExecutionList.md) | 将任意值整体重复 N 次，不拆图片批次、不深拷贝张量，N=0 输出空列表。 | `LiuxinyuRepeatAnyToExecutionList` |
 | [将任意数组转为执行列表](docs/LiuxinyuArrayToExecutionList.md) | 直接将数组第一层元素逐项输出，保留类型、顺序和对象引用，空数组输出零项。 | `LiuxinyuArrayToExecutionList` |
 | [插入字段到字典或者js对象](docs/LiuxinyuInsertJSObject.md) | 按点号和下标定位；字典插入键值对，数组追加一个任意值，返回完整结构且不修改输入。 | `LiuxinyuInsertJSObject` |
@@ -309,9 +339,14 @@ git pull --ff-only
 | [可遍历字典的索引列表](docs/LiuxinyuArrayObjectPaths.md) | 按层数及字段/数组开关列出停止处的路径；同时输出完整索引数组和执行列表。 | `LiuxinyuArrayObjectPaths` |
 | [组装键值对](docs/LiuxinyuBuildKeyValuePairs.md) | 用键和值创建新字典；多个键可共用一个完整值，保留值类型，不提取字段或修改原容器。 | `LiuxinyuBuildKeyValuePairs` |
 | [并和数组中的字典字段为字典](docs/LiuxinyuMergeDictionaryArray.md) | 把字典数组的第一层字段合成一个新字典；空数组输出空字典，重复键报错，值类型原样保留。 | `LiuxinyuMergeDictionaryArray` |
-| [分包跳回](docs/LiuxinyuPacketReturnStart.md) | 仅对执行列表逐包执行，普通数组须先转换；携带上一轮完整数据；空包跳过，耗尽后可复用最后一包。 | `LiuxinyuPacketReturnStart` |
-| [携包条件回归](docs/LiuxinyuPacketReturnEnd.md) | 将还有下一包与输入布尔做六种逻辑运算；true 回归，false 输出最终数据。 | `LiuxinyuPacketReturnEnd` |
-| [执行列表收集为数组](docs/LiuxinyuCollectExecutionList.md) | 把完整执行列表收集为一个数组，保留顺序和嵌套数组，不展开数组元素。 | `LiuxinyuCollectExecutionList` |
+| [对数组中字典元素重排序](docs/LiuxinyuSortDictionaryArray.md) | 按第一层键值升序、降序或随机打乱；完整 ARRAY 输入输出，不修改原数据，执行列表中的各数组分别处理。 | `LiuxinyuSortDictionaryArray` |
+| [下标提取数组元素为新数组](docs/LiuxinyuExtractArray.md) | 按整数下标数组的顺序提取元素，保留重复下标和元素类型；下标从 0 开始，越界报错，完整 ARRAY 输入输出。 | `LiuxinyuExtractArray` |
+| [下标范围提取数组](docs/LiuxinyuArrayRange.md) | 提取下标 min 到 max 闭区间内的连续元素，包含两端；从 0 开始，越界或 min>max 报错，输出完整 ARRAY。 | `LiuxinyuArrayRange` |
+| [分块提取数组为数组](docs/LiuxinyuArrayChunk.md) | 按正整数窗口块大小连续、不重叠地分块，末尾余项单独保留；输出元素为数组的完整 ARRAY，空数组输出空数组。 | `LiuxinyuArrayChunk` |
+| [JSON Schema填写模版](docs/LiuxinyuTemplateForm.md) | STRING 输入 Draft 2020-12 默认方言，节点内 Inspector 支持受父容器约束的嵌套列表（空间足够时完整展开，仅空间不足时滚动，无固定高度上限）、展开层级灰色引导线、随工作流保存并恢复的展开／收起状态、独立字段焦点与条目选择、整项沿列表轨道拖动和连续动画让位、键值对应淡虚线（选中项引导线为 #353535）、受父容器约束的值框与列表项留白、按字形居中的文字及同字体同坐标原位编辑、键盘操作。底部按钮随节点尺寸保持右下角对齐；最左侧可计算上游输入链以更新模板缓存，保留兼容填写值且不执行下游；可复位到输入模板，独立保存模板快照与复位前备份。支持条件／组合字段、作用域及 HTTP(S) 引用、通用类型编辑（带箭头中文类型下拉框，null 显示“无值”）、拖动、滑块、矢量、日期时间和 HEX 颜色。format 按注解处理；按原始规则校验，下拉菜单参考 Box Collider 样式，与触发框等宽、同字号并随画布缩放，支持再次点击收起及按住拖选；字段旁红色错误提示完整换行，并以边框关联对应字段或展开组，自动提示使用显示名，下方错误卡片保持原样；校验失败自动展开错误层级；进入持续校验后每次修改重新检查整份结果，保留旧提示直到新结果返回，全部通过才结束，不自动确认或继续执行；日志式错误区域显示点分隔的完整路径，中文原因自动换行，支持 Schema 作者以 x-error-message 注解自定义报错、未设置时自动解释；注解不生成表单字段或输出数据，[独立中文规则描述包](docs/SchemaChinese.md)按逻辑结构生成要求，禁止条件列出实际字段和值、可推导时直接给出修改选项，点击错误可逐层滚动并在扣除分栏遮挡后的可见画布中央定位字段；Python 发送 Windows 原生通知，点击优先激活已打开目标工作流的页面，失败才新开；模板更新时补齐必填键，同名同类型保留，类型冲突重建并仅在新规则允许时生成编号备份键；变更后须重新确认，已确认且结构不变、合法时复用；执行结束保留已解析控件规则，解析期间不退回任意类型编辑。资源与数值限制见帮助。 | `LiuxinyuTemplateForm` |
+| [携包循环·开始](docs/LiuxinyuPacketReturnStart.md) | 仅对执行列表逐包执行，普通数组须先转换；携带上一轮完整数据；空包跳过，耗尽后可复用最后一包。 | `LiuxinyuPacketReturnStart` |
+| [携包循环·结束](docs/LiuxinyuPacketReturnEnd.md) | 将还有下一包与输入布尔做六种逻辑运算；true 回归，false 输出最终数据。 | `LiuxinyuPacketReturnEnd` |
+| [执行列表收集为数组](docs/LiuxinyuCollectExecutionList.md) | 把完整执行列表收集为一个 ARRAY，保留顺序和嵌套；接字符串端口前需显式序列化。 | `LiuxinyuCollectExecutionList` |
 | [顺合任意执行列表](docs/LiuxinyuConcatAnyExecutionLists.md) | 按输入口从上到下的顺序将各路执行列表首尾相接，保留内部顺序、重复项和类型，不递归拆分数组或图片批次；可串联继续顺合。 | `LiuxinyuConcatAnyExecutionLists` |
 | [结构化数据变换（JSONata）](docs/LiuxinyuStructuredTransform.md) | 用 JSONata 处理最多 100 路 JSON 数据，声明并严格检查结果类型；单一结果出口，另有执行成功与错误信息。需安装 `jsonata-python==0.6.3`。 | `LiuxinyuStructuredTransform` |
 
@@ -329,7 +364,7 @@ git pull --ff-only
 | [取负](docs/LiuxinyuNegate.md) | 返回输入数值的相反数。 | `LiuxinyuNegate` |
 | [三角与反三角函数](docs/LiuxinyuTrigonometry.md) | 三角或反三角函数，支持弧度/角度单位。 | `LiuxinyuTrigonometry` |
 | [双曲与反双曲函数](docs/LiuxinyuHyperbolic.md) | 双曲或反双曲函数，输入需满足相应定义域。 | `LiuxinyuHyperbolic` |
-| [函数生成精度数列](docs/LiuxinyuFunctionGrid.md) | 解析表达式和变量，按范围、间隔与小数位采样，输出多维数列和坐标；表达式中的三角函数使用弧度。 | `LiuxinyuFunctionGrid` |
+| [函数生成精度数列](docs/LiuxinyuFunctionGrid.md) | 支持嵌套求和、阶乘、绝对值、× 和 `2n`；分析余项函数、含多项式修正的渐近阶、参数区域及边界、导数与条件数、正负项和、部分和极值、前向/后向误差与双重级数换序。证明、属性、数值诊断和高精度复核独立计时，保留各阶段结果；连续阶乘复用、精确二进制诊断与整式复核保留完整项数。至少 80 位内部工作精度；输出“值执行列表”“采样坐标”和完整“高精度数列”。详细帮助含交错、p 级数、参数幂级数、矩形截断和拉马努金示例。 | `LiuxinyuFunctionGrid` |
 
 ### 比较、布尔与位运算（3个）
 
@@ -345,10 +380,10 @@ git pull --ff-only
 
 | 节点 | 用途与关键行为 | 节点 ID |
 | --- | --- | --- |
-| [分包执行子流回归](docs/LiuxinyuPacketStart.md) | 只接受执行列表，普通数组须先转换；按最长列表逐包发出，等待本包回归后再发下一包；当前轮次从 1 开始。 | `LiuxinyuPacketStart` |
-| [回归分包子流条件](docs/LiuxinyuPacketEnd.md) | 等待本包所有接入分支完成，全部包结束后按包顺序汇总各路结果。 | `LiuxinyuPacketEnd` |
-| [跳回点](docs/LiuxinyuReturnPoint.md) | 提供初始数据与调回句柄，将回归数据作为下一轮输入。 | `LiuxinyuReturnPoint` |
-| [条件回归](docs/LiuxinyuConditionalReturn.md) | 按句柄复制数据端口与类型；true 携带本轮数据跳回再执行一轮，false 离开循环、输出本轮结果并执行下游。 | `LiuxinyuConditionalReturn` |
+| [分包执行·开始](docs/LiuxinyuPacketStart.md) | 只接受执行列表，普通数组须先转换；按最长列表逐包发出，等待本包回归后再发下一包；当前轮次从 1 开始。 | `LiuxinyuPacketStart` |
+| [分包执行·结束](docs/LiuxinyuPacketEnd.md) | 等待本包所有接入分支完成，全部包结束后按包顺序汇总各路结果。 | `LiuxinyuPacketEnd` |
+| [条件循环·开始](docs/LiuxinyuReturnPoint.md) | 提供初始数据与调回句柄，将回归数据作为下一轮输入。 | `LiuxinyuReturnPoint` |
+| [条件循环·结束](docs/LiuxinyuConditionalReturn.md) | 按句柄复制数据端口与类型；true 携带本轮数据跳回再执行一轮，false 离开循环、输出本轮结果并执行下游。 | `LiuxinyuConditionalReturn` |
 | [判断哈希相等](docs/LiuxinyuHashEqual.md) | 比较两份数据的类型、SHA-256、MD5 并精确复核内容，返回单个布尔值。 | `LiuxinyuHashEqual` |
 | [条件为真时报错停止](docs/LiuxinyuRaiseIf.md) | true 按指定错误信息停止当前执行，false 放行；可接入下游依赖来等待检查。 | `LiuxinyuRaiseIf` |
 
@@ -365,8 +400,8 @@ git pull --ff-only
 
 | 节点 | 用途与关键行为 | 节点 ID |
 | --- | --- | --- |
-| [传入虚拟连接](docs/LiuxinyuVirtualOutput.md) | 发送端，连接一条或多条上游数据；填写键后与多个接收端配对，动态输入按编号传递。 | `LiuxinyuVirtualOutput` |
-| [传出虚拟连接](docs/LiuxinyuVirtualInput.md) | 接收端，可在多处使用同键取得唯一发送端各路结果并提供对应输出；自动保留真实上游依赖及执行列表语义。 | `LiuxinyuVirtualInput` |
+| [传入虚拟连接](docs/LiuxinyuVirtualOutput.md) | 发送端，连接一条或多条上游数据；填写键后与多个接收端配对，动态输入按编号传递。标题右箭头定位接收端，多目标展开接口与子图路径列表。 | `LiuxinyuVirtualOutput` |
+| [传出虚拟连接](docs/LiuxinyuVirtualInput.md) | 接收端，可在多处使用同键取得唯一发送端各路结果并提供对应输出；自动保留真实上游依赖及执行列表语义。标题左箭头定位发送端，支持跨子图跳转。 | `LiuxinyuVirtualInput` |
 
 位于 `liuxinyu/虚拟连接`。键为空时没有数据端口，填写后至少出现一路；一键只允许一个传入端（发送端），可有多个传出端（接收端）；仅传入端重名时提示并清空新填写的键。任一端新增连接时，所有同键端口同步数量和类型；某一路在传入端及全部传出端都断开后才同步删除，中间空路也会收起并保持实际连线配对，末尾保留备用口。运行前逐个检查下游要求。键控件不占数据通道；一条输入对应一条输出，另留一个备用空口。已使用的输出缺少对应输入时，运行前报错并指出键、通道和两端节点，未用备用口不报错。主图与嵌套子图共用当前工作流的键空间。运行前检查配对、类型与依赖环，再将虚拟连接编译为普通 API 连线；不使用运行变量、不增添执行顺序节点。键与连线布局随工作流 JSON 保存。新增 Python 节点后重启后端并刷新页面；供 API 执行时使用安装本扩展的前端导出的 API 工作流。
 
@@ -376,7 +411,7 @@ git pull --ff-only
 | --- | --- | --- |
 | [运行cmd命令](docs/RunCmd.md) | 在 Windows 主机运行单条或多行 cmd，合并返回标准输出和错误输出；可设超时及是否结束进程。 | `RunCmd` |
 
-### 内部调度节点（7个）
+### 内部调度节点（8个）
 
 以下节点标记为开发专用，由分包或条件循环自动创建，**无需手动添加或接线**。列出是为了让节点总数和错误报告中的 ID 都有出处。
 
@@ -386,9 +421,10 @@ git pull --ff-only
 | `LiuxinyuPacketStep` | 依次展开每包子流，在全部处理完毕后释放回归节点。 |
 | `LiuxinyuPacketCollect` | 收集当前包各路结果，追加到此前包的结果中。 |
 | `LiuxinyuReturnSource` | 提供当前轮完整数据，保持数组、字典和图片批次。 |
-| `LiuxinyuConditionalStep` | 按布尔条件展开下一轮，或结束并释放条件回归节点。 |
+| `LiuxinyuConditionalStep` | 按布尔条件展开下一轮，或结束并释放条件循环·结束节点。 |
 | `LiuxinyuPacketReturnSource` | 提供携包循环当前轮的完整状态、分包数据和轮次。 |
 | `LiuxinyuPacketReturnStep` | 按继续条件展开携包循环，退出时释放回归节点并交付最后状态。 |
+| `LiuxinyuTemplateSchemaCache` | [表单模板刷新](docs/LiuxinyuTemplateForm.md#计算链以更新模版缓存)自动创建的内部终点，仅计算输入链、校验 Schema 并将模板写入执行历史；不执行表单后的下游。 |
 
 ## 数组、执行列表和图片批次
 
@@ -518,13 +554,15 @@ Get-ChildItem ComfyUI\custom_nodes\comfyui-liuxinyu-packs\tests\test_*.py | ForE
 }
 ```
 
-前端逻辑测试需要 Node.js，在本包目录用 PowerShell 执行。子图封装和画布背景测试需要安装版本的前端 bundle，端口排序、焦点保护和节点查找测试也使用它验证原生布局、回调及导航；`$frontendBundle` 应指向当前页面实际加载的 `settingStore-*.js`，不要从残留旧版本文件中随意选取：
+前端逻辑测试需要 Node.js，在本包目录用 PowerShell 执行。子图封装和画布背景测试需要安装版本的前端 bundle，端口排序、原生输入框回调和节点查找测试也使用它验证原生布局、回调及导航；`$frontendBundle` 应指向当前页面实际加载的 `settingStore-*.js`，不要从残留旧版本文件中随意选取：
 
 ```powershell
 $frontendBundle = "<当前前端 settingStore-*.js 的完整路径>"
 Get-ChildItem tests\*.cjs | ForEach-Object {
     if ($_.BaseName -in @("test_subgraph_transfer", "test_port_order", "test_focus_guard", "test_canvas_background", "test_node_find")) {
         node $_.FullName $frontendBundle
+    } elseif ($_.BaseName -in @("test_activity", "test_execution_resume")) {
+        node $_.FullName "$frontendBundle.map"
     } else {
         node $_.FullName
     }
@@ -532,7 +570,7 @@ Get-ChildItem tests\*.cjs | ForEach-Object {
 }
 ```
 
-测试覆盖分包顺序/嵌套、图片切分、保存、缓存、像素/数学和预览生命周期，以及端口与控件整组排序、子图接口同步、嵌套封装保留连线、保存重载高度、后台焦点保护、工作流内容比较和布局几何复核。模拟前端测试不能代替真实浏览器的视觉、性能和交互验证，也不代表所有版本及系统都兼容。
+测试覆盖分包顺序/嵌套、图片切分、保存、缓存、像素/数学和预览生命周期，以及端口与控件整组排序、子图接口同步、嵌套封装保留连线、保存重载高度、原生输入框回调、工作流内容比较和布局几何复核。模拟前端测试不能代替真实浏览器的视觉、性能和交互验证，也不代表所有版本及系统都兼容。
 
 ### 反馈与贡献
 
@@ -543,3 +581,5 @@ Get-ChildItem tests\*.cjs | ForEach-Object {
 ## 许可证
 
 本项目以 [GPL-3.0](LICENSE)（GNU 通用公共许可证第 3 版）发布。复制、修改或合并本项目的衍生作品，须同样以 GPL-3.0 及相应版权声明开源。
+
+切分检查图与最终切分都接受空边界数组 `[]`：前者逐张返回整图供复核，后者逐张保留整图，避免为了通过校验硬切完整主题。详见[切分检查图](docs/LiuxinyuSplitBoundaryPreview.md#不需要切分的完整图片)与[最终切分](docs/LiuxinyuSplitSegments.md#不需要切分的完整图片)。

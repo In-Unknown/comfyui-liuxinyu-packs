@@ -68,9 +68,9 @@ class LiuxinyuPacketReturnStart(io.ComfyNode):
     @classmethod
     def define_schema(cls):
         return io.Schema(
-            node_id="LiuxinyuPacketReturnStart", display_name="分包跳回", category="liuxinyu/流程控制",
+            node_id="LiuxinyuPacketReturnStart", display_name="携包循环·开始", category="liuxinyu/流程控制",
             description="逐包执行，同时传递上一轮处理后的完整数据。分包数据只接受执行列表，数组须先接「将任意数组转为执行列表」。被处理数据不拆包。"
-                        "分包回归条件直接连接携包条件回归。空包跳过循环并输出初始数据；耗尽后仍回归则复用最后一包。",
+                        "分包回归条件直接连接携包循环·结束。空包跳过循环并输出初始数据；耗尽后仍回归则复用最后一包。",
             inputs=[growing("states", "state", "被处理数据"), growing("packets", "packet", "分包数据")],
             outputs=start_outputs(), is_input_list=True, enable_expand=True, loop_boundary="start",
             hidden=[io.Hidden.dynprompt, io.Hidden.execution_list, io.Hidden.unique_id])
@@ -96,15 +96,15 @@ class LiuxinyuPacketReturnStart(io.ComfyNode):
         if count and any(not column for column in columns.values()):
             raise ValueError("分包数据混有空列，无法复用其最后一项；请补充或断开空列。")
         if "_loop_end" not in start:
-            raise ValueError("请将分包回归条件直接连接对应的携包条件回归。")
+            raise ValueError("请将分包回归条件直接连接对应的携包循环·结束。")
         end_id = start["_loop_end"]
         end = prompt.get_node(end_id)
         if end["class_type"] != "LiuxinyuPacketReturnEnd" or end["inputs"].get("handle") != [start_id, 0]:
-            raise ValueError("分包跳回必须与携包条件回归直接配对，不能交叉闭合。")
+            raise ValueError("携包循环·开始必须与携包循环·结束直接配对，不能交叉闭合。")
         returns = {name.removeprefix("states."): value for name, value in end["inputs"].items()
                    if name.startswith("states.")}
         if set(returns) != set(state):
-            raise ValueError("处理完成数据必须与分包跳回的被处理数据逐项对应，不能缺少或增加。")
+            raise ValueError("处理完成数据必须与携包循环·开始的被处理数据逐项对应，不能缺少或增加。")
         for name, value in returns.items():
             initial = start["inputs"][f"states.{name}"]
             if is_link(initial) and is_link(value):
@@ -116,10 +116,10 @@ class LiuxinyuPacketReturnStart(io.ComfyNode):
         for node in [*body.values(), end]:
             for value in node["inputs"].values():
                 if is_link(value) and value[0] == start_id and not 0 <= value[1] < len(state) + len(columns) + 2:
-                    raise ValueError("分包跳回输出数量与已连接的被处理数据、分包数据不一致。")
+                    raise ValueError("携包循环·开始输出数量与已连接的被处理数据、分包数据不一致。")
         operation = end["inputs"].get("operation", "与")
         if operation not in OPERATORS:
-            raise ValueError("逻辑运算必须在携包条件回归节点中选择。")
+            raise ValueError("逻辑运算必须在携包循环·结束节点中选择。")
         plan = {"start": start_id, "end": end_id, "body": body, "returns": returns,
                 "condition": end["inputs"].get("condition", True), "operation": operation,
                 "columns": columns, "count": count,
@@ -139,7 +139,7 @@ class LiuxinyuPacketReturnEnd(io.ComfyNode):
     @classmethod
     def define_schema(cls):
         return io.Schema(
-            node_id="LiuxinyuPacketReturnEnd", display_name="携包条件回归", category="liuxinyu/流程控制",
+            node_id="LiuxinyuPacketReturnEnd", display_name="携包循环·结束", category="liuxinyu/流程控制",
             description="连接分包回归条件后，按被处理数据的数量生成处理完成数据输入与输出。"
                         "将内部的‘还有下一包’与输入布尔做选定运算。true 回归新数据；false 输出处理完成数据。"
                         "耗尽后仍继续时复用最后一包；默认‘与’和 true 遍历全部包。",

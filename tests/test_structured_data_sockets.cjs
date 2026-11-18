@@ -38,6 +38,20 @@ async function main() {
     {name:'any',type:'*',link:null},{name:'status',type:'BOOLEAN',link:null}],[]);
   extension.nodeCreated(transform);
   const settle=async()=>{await Promise.resolve();await Promise.resolve();};
+  const collector=node('LiuxinyuCollectExecutionList', [{name:'value',type:'*'}],
+    [{name:'完整数组',type:'*',links:[]}]);
+  let configureCalls=0;
+  collector.onConfigure=()=>{configureCalls++;};
+  extension.nodeCreated(collector);
+  assert.equal(collector.outputs[0].type,'ARRAY');
+  const arrayLink=connect(collector,0,sink,1);
+  collector.outputs[0].type='*'; // A legacy workflow restores its saved wildcard.
+  collector.onConfigure();
+  assert.equal(configureCalls,1);
+  assert.equal(collector.outputs[0].type,'ARRAY');
+  assert.equal(collector.inputs[0].type,'*');
+  assert.equal(graph.links.get(arrayLink).type,'ARRAY');
+  assert.equal(sink.inputs[1].link,arrayLink,'Loading must preserve existing wiring');
   await settle();
   assert.equal(transform.outputs[0].type,'DICT');
   assert.equal(transform.onConnectInput(0,'IMAGE'),false);

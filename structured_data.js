@@ -45,6 +45,26 @@ function refresh(node) {
 app.registerExtension({
   name: "liuxinyu.StructuredDataTypes",
   nodeCreated(node) {
+    if (node.comfyClass === "LiuxinyuCollectExecutionList") {
+      const refreshArray = () => {
+        const output = node.outputs?.[0];
+        if (!output) return;
+        output.type = "ARRAY";
+        for (const id of output.links || []) {
+          const link = getLink(node.graph, id);
+          if (link) link.type = "ARRAY";
+        }
+        node.setDirtyCanvas(true, true);
+      };
+      const configured = node.onConfigure;
+      node.onConfigure = function (...args) {
+        const result = configured?.apply(this, args);
+        refreshArray();
+        return result;
+      };
+      refreshArray();
+      return;
+    }
     if (node.comfyClass !== "LiuxinyuStructuredTransform") return;
     const widget = node.widgets?.find(w => w.name === "result_type");
     if (widget) {

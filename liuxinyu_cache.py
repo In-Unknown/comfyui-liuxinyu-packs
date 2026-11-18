@@ -202,7 +202,10 @@ def _remove_files(files):
 
 
 def _update_digest(digest, value):
-    if isinstance(value, torch.Tensor):
+    if isinstance(value, bytes):
+        digest.update(f"bytes:{len(value)}:".encode())
+        digest.update(value)
+    elif isinstance(value, torch.Tensor):
         digest.update(str((tuple(value.shape), str(value.dtype))).encode())
         # Hash exact values before 8-bit conversion, one frame at a time.
         for frame in value.detach():

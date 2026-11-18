@@ -15,6 +15,7 @@ import execution
 import nodes
 import numpy as np
 from comfy_api.latest import io
+from comfy_execution.validation import validate_node_input
 from number_node import LiuxinyuNumberArray as NumberArray, LiuxinyuNumberConvert
 
 
@@ -82,6 +83,37 @@ class NumberArrayTests(unittest.TestCase):
             arrays = executor.history_result["outputs"]["out"]["arrays"]
             self.assertEqual(arrays, [[7.0, 0.5]])
             self.assertTrue(all(type(value) is float for value in arrays[0]))
+
+
+class NumberConvertTests(unittest.TestCase):
+    def test_scalar_ports_reject_array_connections(self):
+        info = LiuxinyuNumberConvert.GET_NODE_INFO_V1()
+        accepted = info["input"]["required"]["value"][0]
+        self.assertEqual(set(accepted.split(",")), {"INT", "FLOAT", "BOOLEAN", "STRING"})
+        for kind in ("ARRAY", "DICT", "IMAGE"):
+            self.assertFalse(validate_node_input(kind, accepted))
+        for kind in ("INT", "FLOAT", "BOOLEAN", "STRING"):
+            self.assertTrue(validate_node_input(kind, accepted))
+        self.assertEqual(info["output_is_list"], [False, False])
+        self.assertFalse(LiuxinyuNumberConvert.define_schema().is_input_list)
+
+    def test_scalar_conversion_and_array_rejection(self):
+        for value, expected in [(7, (7.0, 7)), (-3.9, (-3.9, -3)),
+                                (True, (1.0, 1)), (" 2.5 ", (2.5, 2))]:
+            self.assertEqual(LiuxinyuNumberConvert.execute(value).result, expected)
+        for value in ([], [1], [1, "2.5"], [[1]], (1,)):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "不接受数组"):
+                LiuxinyuNumberConvert.execute(value)
+
+    def test_native_mapping_outputs_one_scalar_per_item(self):
+        outputs, _, _, _ = asyncio.run(execution.get_output_data(
+            "number-convert-test", "convert", LiuxinyuNumberConvert,
+            {"value": [1, "2.5", True]}))
+        self.assertEqual(outputs, [[1.0, 2.5, 1.0], [1, 2, 1]])
+        with self.assertRaisesRegex(ValueError, "不接受数组"):
+            asyncio.run(execution.get_output_data(
+                "number-convert-test", "convert", LiuxinyuNumberConvert,
+                {"value": [[1, 2]]}))
 
 
 if __name__ == "__main__":

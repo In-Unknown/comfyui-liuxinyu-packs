@@ -11,22 +11,30 @@ function readJSON(key) {
 }
 
 function chooseFileVersion(path, savedAt, modified, manual = false) {
+  const comparable = Number.isFinite(savedAt) && savedAt > 0 && Number.isFinite(modified) && modified > 0;
+  const olderFile = comparable && modified < savedAt;
+  const newerFile = comparable && modified > savedAt;
+  const timeNote = olderFile
+    ? "前端保存时间比后端文件修改时间新，后端文件可能是较早版本。是否将当前画布还原为文件内容？"
+    : newerFile
+      ? "后端文件修改时间比前端保存时间新。是否将后端文件内容加载到当前画布？"
+      : "仅凭这些时间无法判断内容的新旧。是否用后端文件内容替换当前画布？";
   const dialog = document.createElement("dialog");
   dialog.style.cssText = "max-width:560px;width:calc(100% - 48px);padding:24px;border:1px solid #777;border-radius:12px;background:var(--comfy-menu-bg,#222);color:var(--fg-color,#eee);box-shadow:0 12px 48px #0008;";
   const title = document.createElement("h2");
-  title.textContent = manual ? "同步实际工作流文件" : "工作流文件有新变动";
+  title.textContent = olderFile ? "前端保存较新：还原为文件内容？" : manual ? "同步后端工作流文件" : "工作流文件有新变动";
   title.style.cssText = "font-size:18px;margin:0 0 16px";
   const message = document.createElement("p");
   message.style.cssText = "white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.7";
   const reason = manual ? "当前画布与后端文件内容不同。" : "页面已按原方式恢复。";
-  message.textContent = `${path}\n\n上次前端保存：${new Date(savedAt).toLocaleString()}\n后端文件修改：${new Date(modified).toLocaleString()}\n\n${reason}是否将当前页面同步到实际文件的最新内容？同步会替换当前页面内容；什么都不做则继续编辑当前内容。`;
+  message.textContent = `${path}\n\n上次前端保存：${new Date(savedAt).toLocaleString()}\n后端文件修改：${new Date(modified).toLocaleString()}\n\n${reason}\n${timeNote}\n此操作会替换当前画布并清除旧草稿，不会写入后端文件；什么都不做则继续编辑当前内容。`;
   const actions = document.createElement("div");
   actions.style.cssText = "display:flex;gap:12px;justify-content:flex-end;flex-wrap:wrap;margin-top:20px";
   const keep = document.createElement("button");
   keep.textContent = "什么都不做";
   keep.autofocus = true;
   const sync = document.createElement("button");
-  sync.textContent = "同步到实际文件";
+  sync.textContent = olderFile ? "还原为文件内容" : "加载后端文件内容";
   for (const button of [keep, sync]) {
     button.type = "button";
     button.style.cssText = "padding:10px 16px;border:1px solid #888;border-radius:6px;background:var(--comfy-input-bg,#333);color:inherit;cursor:pointer";
@@ -183,6 +191,25 @@ app.registerExtension({
     let checkAgain = false;
     let forceAgain = false;
     let cancelPrompt;
+    let connected = true;
+    let backgroundNotice;
+
+    function clearBackgroundNotice(path) {
+      if (!backgroundNotice || (path && backgroundNotice.path !== path)) return;
+      manager.toast?.remove?.(backgroundNotice.message);
+      backgroundNotice = undefined;
+    }
+
+    function showBackgroundNotice(path, detail, severity = "warn") {
+      const key = `${path}:${severity}:${detail}`;
+      if (backgroundNotice?.key === key) return;
+      clearBackgroundNotice();
+      const message = { severity, summary: "工作流文件检查未完成",
+        detail: `${path}\n${detail}\n尚未确认后端文件是否有变动；连接可用时会继续自动检查（页面可见时每 5 秒）。也可右键手动检查。` };
+      backgroundNotice = { path, key, message };
+      // No expiry: failure is an unresolved state, not evidence of no changes.
+      manager.toast?.add(message);
+    }
 
     function persist() {
       // Metadata only, bounded independently of workflow size.
@@ -231,6 +258,7 @@ app.registerExtension({
     }
 
     beforeLoad = () => {
+      clearBackgroundNotice();
       clearTimeout(restoreTimer);
       restoring = true;
       generation++;
@@ -249,21 +277,33 @@ app.registerExtension({
       const directory = path.slice(0, path.lastIndexOf("/"));
       const filename = path.slice(directory.length + 1);
       const response = await api.fetchApi(`/userdata?dir=${encodeURIComponent(directory)}&recurse=false&full_info=true`, { cache: "no-store" });
-      if (response.status === 404) return null;
-      if (!response.ok) throw new Error(`文件信息读取失败 (${response.status})`);
-      return (await response.json()).find((file) => file.path === filename) || null;
+      if (!response.ok) throw new Error(`文件信息读取失败 (${response.status})\n服务端响应：${await response.text()}`);
+      const info = (await response.json()).find((file) => file.path === filename) || null;
+      if (info && !Number.isFinite(info.modified)) throw new Error("后端文件信息缺少有效的修改时间，无法判断是否有变动。");
+      return info;
     }
 
-    function warn(error) {
-      console.warn("[liuxinyu] Workflow file sync:", error);
-      manager.toast?.add({ severity: "warn", summary: "工作流文件同步未完成", detail: "请稍后切回页面重试。" });
+    function warn(error, path, stage, confirmed, request, background) {
+      const reason = String(error?.message || error);
+      const detail = `${stage}失败：${reason}\n请求：${request}`;
+      const repeated = backgroundNotice?.key === `${path}:warn:${detail}`;
+      if (!repeated || !background) console.warn("[liuxinyu] Workflow file sync:", { path, stage, request, time: new Date().toISOString() }, error);
+      if (background) { showBackgroundNotice(path, detail); return; }
+      manager.toast?.add({ severity: "warn", summary: confirmed ? "工作流文件同步未完成" : "工作流文件检查失败",
+        detail: `${path}\n${detail}\n可通过右键“检查/同步后端工作流文件”重试。`, life: 10000 });
     }
 
-    async function checkCurrent({ force = false, notifyOnError = true } = {}) {
+    async function checkCurrent({ force = false } = {}) {
       if (checking) { checkAgain = true; forceAgain ||= force; return; }
       const workflow = workflows.activeWorkflow;
       if (!workflow?.isPersisted || !workflow.path.startsWith("workflows/")) return;
       const path = workflow.path;
+      if (!connected && !force) {
+        if (backgroundNotice?.path !== path || backgroundNotice.message.severity !== "warn") {
+          showBackgroundNotice(path, "后端连接已断开，自动检查已暂停。", "info");
+        }
+        return;
+      }
       const ticket = generation;
       const isCurrent = () => ticket === generation && workflow === workflows.activeWorkflow && workflow.path === path;
       // Without any previous frontend save, there is no historical interval
@@ -273,19 +313,29 @@ app.registerExtension({
       const savedAt = record.savedAt;
       checking = true;
       let finishPrompt;
+      let confirmed = false;
+      let stage = "读取后端文件信息";
+      const infoRequest = `GET /userdata?dir=${encodeURIComponent(path.slice(0, path.lastIndexOf("/")))}&recurse=false&full_info=true`;
+      const contentRequest = `GET /userdata/${encodeURIComponent(path)}`;
+      let request = infoRequest;
       try {
         const info = await fileInfo(path);
-        if (!isCurrent() || !info) return;
+        if (!isCurrent()) return;
+        if (!info) throw new Error("后端未找到对应的工作流文件，可能已移动或删除，无法确认是否有变动。");
         const revision = `${info.modified}:${info.size}`;
+        if (!force) clearBackgroundNotice(path);
         if (!force && (!(info.modified > savedAt) || record.acknowledged === revision)) return;
         if (force) {
+          stage = "读取并比较后端工作流内容";
+          request = contentRequest;
           const response = await api.getUserData(path, { cache: "no-store" });
           if (!isCurrent()) return;
-          if (!response.ok) throw new Error(`工作流文件读取失败 (${response.status})`);
+          if (!response.ok) throw new Error(`工作流文件读取失败 (${response.status})\n服务端响应：${await response.text()}`);
           const content = await response.text();
           if (!isCurrent()) return;
           const graph = JSON.parse(content);
           if (!graph || !Array.isArray(graph.nodes)) throw new Error("文件不是画布工作流");
+          clearBackgroundNotice(path);
           // Read the live canvas after the download, not the last captured
           // draft: edits made since that capture must participate in the check.
           if (workflowDifferences(graph, app.rootGraph.serialize()).length === 0) {
@@ -311,9 +361,15 @@ app.registerExtension({
 
         // Fetch again after the user chooses sync, so changes made while the
         // question was open are included. No write request is made.
+        confirmed = true;
+        stage = "重新读取后端文件信息";
+        request = infoRequest;
         const latestInfo = await fileInfo(path);
+        if (!latestInfo) throw new Error("后端未找到对应的工作流文件，不能加载。");
+        stage = "读取并解析后端工作流内容";
+        request = contentRequest;
         const response = await api.getUserData(path, { cache: "no-store" });
-        if (!response.ok || !latestInfo) throw new Error(`工作流文件读取失败 (${response.status})`);
+        if (!response.ok) throw new Error(`工作流文件读取失败 (${response.status})\n服务端响应：${await response.text()}`);
         const content = await response.text();
         const graph = JSON.parse(content);
         if (!graph || !Array.isArray(graph.nodes)) throw new Error("文件不是画布工作流");
@@ -327,6 +383,8 @@ app.registerExtension({
         };
         const previousInitial = JSON.parse(JSON.stringify(workflow.changeTracker.initialState));
         syncing = true;
+        stage = "加载工作流到画布";
+        request = "本地 app.loadGraphData（不发起文件写入）";
         try {
           const loaded = await app.loadGraphData(graph, true, true, workflow);
           if (loaded === false) throw new Error("工作流加载失败");
@@ -362,7 +420,7 @@ app.registerExtension({
           syncing = false;
         }
       } catch (error) {
-        if (notifyOnError) warn(error);
+        if (confirmed || isCurrent()) warn(error, path, stage, confirmed, request, !force && !confirmed);
       } finally {
         finishPrompt?.();
         checking = false;
@@ -376,11 +434,15 @@ app.registerExtension({
     }
 
     manualCheck = () => scheduleCheck(true);
-    api.addEventListener("reconnected", () => scheduleCheck());
+    api.addEventListener("reconnecting", () => {
+      connected = false;
+      if (!checking && !restoring && !syncing) void checkCurrent();
+    });
+    api.addEventListener("reconnected", () => { connected = true; scheduleCheck(); });
     window.addEventListener("focus", () => scheduleCheck());
     setInterval(() => {
       if (document.visibilityState === "visible" && !restoring && !syncing && !checking) {
-        void checkCurrent({ notifyOnError: false });
+        void checkCurrent();
       }
     }, 5000);
   },

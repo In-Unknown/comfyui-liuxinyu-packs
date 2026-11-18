@@ -8,17 +8,18 @@ NODE_DISPLAY_NAME_MAPPINGS = {}
 current_dir = os.path.dirname(__file__)
 
 # Shared helpers use the same import names in ComfyUI and standalone tests.
-for helper in ("liuxinyu_cache", "liuxinyu_execution_lists"):
+for helper in ("liuxinyu_cache", "liuxinyu_execution_lists", "liuxinyu_image_bytes", "function_series", "function_series_analysis", "template_form_notifications", "schema_chinese"):
     if helper in sys.modules:
         continue
-    helper_spec = importlib.util.spec_from_file_location(helper, os.path.join(current_dir, helper + ".py"))
+    helper_path = os.path.join(current_dir, helper, "__init__.py") if os.path.isdir(os.path.join(current_dir, helper)) else os.path.join(current_dir, helper + ".py")
+    helper_spec = importlib.util.spec_from_file_location(helper, helper_path)
     helper_module = importlib.util.module_from_spec(helper_spec)
     sys.modules[helper] = helper_module
     helper_spec.loader.exec_module(helper_module)
 
 # 自动扫描当前目录下的所有 .py 文件并加载节点
 for filename in sorted(os.listdir(current_dir)):
-    if not filename.endswith(".py") or filename.startswith("__") or filename in ("liuxinyu_cache.py", "liuxinyu_execution_lists.py"):
+    if not filename.endswith(".py") or filename.startswith("__") or filename in ("liuxinyu_cache.py", "liuxinyu_execution_lists.py", "liuxinyu_image_bytes.py", "function_series.py", "function_series_analysis.py", "template_form_notifications.py"):
         continue
     
     module_name = filename[:-3]

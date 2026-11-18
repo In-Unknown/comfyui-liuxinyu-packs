@@ -14,7 +14,7 @@ class LiuxinyuCollectExecutionList(io.ComfyNode):
             category="liuxinyu/结构化数据", is_input_list=True,
             description="把完整执行列表收集为一个数组。保留顺序和嵌套数组，不展开数组元素。",
             inputs=[io.AnyType.Input("value", display_name="执行列表")],
-            outputs=[io.AnyType.Output(display_name="完整数组")],
+            outputs=[io.Array.Output(display_name="完整数组")],
         )
 
     @classmethod

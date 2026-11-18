@@ -39,7 +39,7 @@ function harness() {
     openSubgraph(graph, host) { this.setGraph(graph); surface.dispatchEvent({ type: 'subgraph-opened', detail: { subgraph: graph, fromNode: host } }); },
     selectNode(node) { this.selected = node; }, setDirty() {}, setZoom(scale) { this.ds.scale = scale; },
     centerOnNode(node) {
-      this.ds.offset = node.pos.map((p, i) => -p - node.size[i] / 2 + [surface.width, surface.height][i] / (2 * this.ds.scale * 2));
+      this.ds.offset = node.pos.map((p, i) => -p - node.size[i] / 2 + [surface.width, surface.height][i] / (2 * this.ds.scale * (context.window.devicePixelRatio || 1)));
     },
   };
   const app = { canvas, registerExtension(e) { extension = e; } };
@@ -50,8 +50,9 @@ function harness() {
     CustomEvent: class { constructor(type, options) { this.type = type; Object.assign(this, options); } },
     URL, console,
   });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../canvas_viewport.js'), 'utf8').replace(/^export /gm, ''), context);
   const source = fs.readFileSync(path.join(__dirname, '../node_find.js'), 'utf8')
-    .replace(/^import .*;\r?$/gm, '').replaceAll('import.meta.url', '"http://localhost/extensions/liuxinyu/node_find.js"');
+    .replace(/^import .*;\r?$/gm, '').replace(/^export /gm, '').replaceAll('import.meta.url', '"http://localhost/extensions/liuxinyu/node_find.js"');
   vm.runInContext(source + '\nglobalThis.ui = () => ({panel,input,status,results});', context);
   function graph(nodes = []) {
     const g = { _nodes: nodes, attachCanvas(c) { c.graph = this; c.subgraph = this === app.rootGraph ? undefined : this; } };
@@ -112,6 +113,15 @@ async function main() {
   target.pos.forEach((p, i) => assert(Math.abs((p + target.size[i] / 2 + h.canvas.ds.offset[i]) * h.canvas.ds.scale * 2 -
     [h.canvas.canvas.width, h.canvas.canvas.height][i] / 2) < 1e-8, 'Target is centered at current DPR and scale'));
   assert.equal(JSON.stringify([target.pos, target.size, root._nodes.map(n => n.id)]), before);
+  assert(c.isCurrentGraphLocation(c.findNodes(root, '771:745:729')[0]));
+  assert(!c.isCurrentGraphLocation(c.findNodes(root, '800:729')[0]));
+  const openedBefore = h.events.filter(e => e.type === 'subgraph-opened').length;
+  locating = c.revealNode(c.findNodes(root, '800:729')[0]);
+  await h.settle(); assert.equal(await locating, true);
+  assert.equal(h.events.filter(e => e.type === 'subgraph-opened').length, openedBefore + 1,
+    'The same graph definition must reopen through the requested host instance');
+  assert(c.isCurrentGraphLocation(c.findNodes(root, '800:729')[0]));
+  assert(!c.isCurrentGraphLocation(c.findNodes(root, '771:745:729')[0]));
   locating = c.revealNode(c.findNodes(root, '785')[0]);
   await h.settle(); assert.equal(await locating, true); assert.equal(h.canvas.graph, root);
   const obsolete = c.findNodes(root, '785')[0]; root._nodes.pop();
@@ -147,6 +157,60 @@ async function main() {
   assert(h.canvas.ds.scale < 1.9);
   assert(large.size[0] * h.canvas.ds.scale <= h.canvas.canvas.width / 2 * 0.8);
   assert(large.size[1] * h.canvas.ds.scale <= h.canvas.canvas.height / 2 * 0.8);
+
+  const vp = harness();
+  const rect = (left, top, width, height) => ({left, top, width, height, right:left+width, bottom:top+height});
+  let surfaceRect = rect(50, 40, 1000, 800);
+  let centralRect = rect(50, 100, 600, 680);
+  let docked = [];
+  vp.canvas.canvas.getBoundingClientRect = () => surfaceRect;
+  vp.doc.querySelector = selector => selector === '.graph-canvas-panel' && centralRect
+    ? {getBoundingClientRect:()=>centralRect} : null;
+  vp.doc.querySelectorAll = () => docked;
+  const visibleTarget = vp.node(77); visibleTarget.size = [600, 400];
+  function assertVisibleCenter(expected, message) {
+    const ratio = vp.context.window.devicePixelRatio;
+    const logicalWidth = vp.canvas.canvas.width / ratio, logicalHeight = vp.canvas.canvas.height / ratio;
+    const screenCenter = visibleTarget.pos.map((p,i) =>
+      (p + visibleTarget.size[i]/2 + vp.canvas.ds.offset[i]) * vp.canvas.ds.scale
+      * [surfaceRect.width/logicalWidth, surfaceRect.height/logicalHeight][i] + [surfaceRect.left,surfaceRect.top][i]);
+    assert(Math.abs(screenCenter[0]-(expected.left+expected.width/2))<1e-7,message+' X');
+    assert(Math.abs(screenCenter[1]-(expected.top+expected.height/2))<1e-7,message+' Y');
+    assert(visibleTarget.size[0]*vp.canvas.ds.scale*surfaceRect.width/logicalWidth <= expected.width*0.8,message+' width');
+    assert(visibleTarget.size[1]*vp.canvas.ds.scale*surfaceRect.height/logicalHeight <= expected.height*0.8,message+' height');
+  }
+  vp.context.focusNode(vp.canvas,visibleTarget);
+  assertVisibleCenter(centralRect,'Right sidebar plus top/bottom panels');
+  centralRect=rect(300,100,350,500);
+  vp.context.focusNode(vp.canvas,visibleTarget);
+  assertVisibleCenter(centralRect,'Both sidebars resized');
+  vp.context.window.devicePixelRatio=1.25;
+  vp.context.focusNode(vp.canvas,visibleTarget);
+  assertVisibleCenter(centralRect,'Noninteger DPR and CSS/backing size conversion');
+  vp.context.window.devicePixelRatio=2;
+  centralRect=null;
+  docked=[{getBoundingClientRect:()=>rect(650,40,400,800)},
+    {getBoundingClientRect:()=>rect(50,40,200,800)},
+    {getBoundingClientRect:()=>rect(250,640,400,200)},
+    {hidden:true,getBoundingClientRect:()=>rect(250,40,400,800)}];
+  vp.context.focusNode(vp.canvas,visibleTarget);
+  assertVisibleCenter(rect(250,40,400,600),'Legacy overlapping and hidden panels');
+  surfaceRect=rect(50,40,600,800); // A frontend that already shrinks the real Canvas.
+  docked=[{getBoundingClientRect:()=>rect(650,40,400,800)}];
+  vp.context.focusNode(vp.canvas,visibleTarget);
+  assertVisibleCenter(surfaceRect,'Do not subtract a sidebar outside Canvas twice');
+  surfaceRect=rect(50,40,1000,800); docked=[];
+  vp.context.focusNode(vp.canvas,visibleTarget);
+  assertVisibleCenter(surfaceRect,'Closed sidebars use full Canvas');
+  vp.app.rootGraph=vp.graph([visibleTarget]);vp.canvas.graph=vp.app.rootGraph;
+  centralRect=surfaceRect;
+  vp.canvas.selectNode = function(node) {
+    this.selected=node;
+    vp.frames.push(()=>{centralRect=rect(50,100,500,680);});
+  };
+  const visibleLocate=vp.context.revealNode(vp.context.findNodes(vp.app.rootGraph,'77')[0]);
+  await vp.settle();assert.equal(await visibleLocate,true);
+  assertVisibleCenter(centralRect,'Refit after selection updates the inspector layout');
   const key = (name, extra = {}) => ({ key: name, ctrlKey: false, metaKey: false,
     preventDefault() { this.prevented = true; }, stopImmediatePropagation() { this.stopped = true; }, ...extra });
   let event = key('f', { ctrlKey: true }); c.onKeyDown(event);

@@ -20,6 +20,7 @@ import folder_paths
 from liuxinyu_cache import (
     cached_preview, file_changes, file_digest, preview_path, rebuilding_preview, save_source_preview, source_previews,
 )
+from liuxinyu_image_bytes import EXTENSIONS, decode_frames, encode_frame, save_encoded
 
 
 if os.name == "nt":
@@ -262,9 +263,9 @@ class SaveImageToAbsolutePath:
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {
-            "image": ("IMAGE", {"display_name": "图片", "tooltip": "要保存的输入图像。支持批次传入：当批次数量为 1 时保存为单个文件；当批次数量大于 1 时，自动创建与文件名同名的子文件夹，将批次中的每张图片按序号依次保存到其中。"}),
+            "image": ("IMAGE,IMAGE_BYTES", {"display_name": "图片", "tooltip": "接受图像张量或图像字节。字节输入按一个文件处理，同格式原样保存，不同格式转码；张量批次大于1时创建同名子文件夹逐张保存。执行列表依次处理。"}),
             "folder": ("STRING", {"default": r"D:\\AI\\outputs", "multiline": False, "display_name": "文件夹", "tooltip": "保存文件的绝对路径。必须为绝对路径，不能为空。可点击下方的「选择文件夹」按钮调用系统原生对话框进行选择。"}),
-            "filename": ("STRING", {"default": "test.png", "multiline": False, "display_name": "文件名", "tooltip": "要保存的文件名，需包含扩展名（支持 .png / .jpg / .jpeg / .webp / .bmp）。仅接受纯文件名，不能包含路径分隔符。当批次大于 1 时，此名称同时用作子文件夹名，文件夹内的每张图片以「文件名-序号.扩展名」格式命名，序号前导零位数由批次数量决定。"}),
+            "filename": ("STRING", {"default": "test.png", "multiline": False, "display_name": "文件名", "tooltip": "纯文件名，支持 .png/.jpg/.jpeg/.webp/.bmp/.tif/.tiff/.gif/.avif（需编码器支持）。字节同格式直接写入，不同格式转码，多帧跨格式需先拆帧。张量批次大于1时写入同名子文件夹，以文件名-序号命名。"}),
             "overwrite": ("BOOLEAN", {"default": True, "display_name": "覆盖已有文件", "tooltip": "为 True 时直接覆盖同名文件或文件夹。为 False 时启用自动编号：若保存单张图片且目标文件已存在，则在文件名后追加 _1、_2… 后缀，从小到大找到第一个不存在的名称；若保存批次图片且同名文件夹已存在，则对文件夹名追加 _1、_2… 后缀。文件与文件夹的冲突也会被检测，不会出现同名文件与文件夹并存的情况。"}),
         }}
 
@@ -273,7 +274,7 @@ class SaveImageToAbsolutePath:
     FUNCTION = "save"
     OUTPUT_NODE = True
     CATEGORY = "image"
-    DESCRIPTION = "SaveImageToAbsolutePath 节点将图像保存到指定的绝对路径。支持单张图片和批次图片保存：单张图片直接保存为文件；批次图片自动创建与文件名同名的子文件夹，将批次中的每张图片按序号依次保存。覆盖关闭时自动追加编号避免重名。"
+    DESCRIPTION = "将IMAGE张量或IMAGE_BYTES保存到绝对路径。字节同格式原样写入，不同格式转码；张量批次逐张存入同名目录。覆盖关闭时自动编号；相同输入参数复用缓存，不重复写入。"
 
     @staticmethod
     def _to_pil(image_tensor, ext):
@@ -291,8 +292,10 @@ class SaveImageToAbsolutePath:
             img.save(path, format="WEBP", quality=95)
         elif ext == ".bmp":
             img.save(path, format="BMP")
-        else:
+        elif ext == ".png":
             img.save(path, format="PNG")
+        else:
+            Path(path).write_bytes(encode_frame(img, {"format": EXTENSIONS[ext]}))
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
@@ -321,7 +324,16 @@ class SaveImageToAbsolutePath:
         stem = fp.stem
         suffix = fp.suffix
         ext = suffix.lower()
-        batch_size = image.shape[0]
+        if ext not in EXTENSIONS:
+            raise ValueError(f"不支持的图像扩展名：{ext}")
+        encoded = isinstance(image, bytes)
+        if encoded:
+            first_frame = next(decode_frames(image))
+            batch_size = 1
+        else:
+            if not isinstance(image, torch.Tensor) or image.ndim != 4 or image.shape[0] == 0:
+                raise ValueError("输入须为 IMAGE [B,H,W,C] 张量或 IMAGE_BYTES 图像字节。")
+            batch_size = image.shape[0]
 
         if batch_size == 1:
             path = Path(folder) / filename
@@ -334,10 +346,13 @@ class SaveImageToAbsolutePath:
                         path = candidate
                         break
                     counter += 1
-            img = self._to_pil(image[0], ext)
+            img = first_frame if encoded else self._to_pil(image[0], ext)
             if not rebuilding_preview():
                 path.parent.mkdir(parents=True, exist_ok=True)
-                self._save_image(img, path, ext)
+                if encoded:
+                    save_encoded(image, path, ext)
+                else:
+                    self._save_image(img, path, ext)
 
             preview_name = f"SaveImageToAbsolutePath_{uuid.uuid4().hex}.png"
             img.save(preview_path(preview_name), format="PNG")
@@ -808,7 +823,7 @@ class MatchPath:
     OUTPUT_IS_LIST = (True,)
     FUNCTION = "execute"
     CATEGORY = "image"
-    DESCRIPTION = "从指定目录下匹配符合条件的文件或目录。支持字符串包含、正则表达式，以及基于文件系统属性（名称、大小、修改时间、扩展名等）的布尔表达式。字符串和正则默认只匹配名称，可开启「匹配完整路径」改为对整条路径匹配。"
+    DESCRIPTION = "从指定目录下匹配符合条件的文件或目录。支持字符串包含、正则表达式，以及基于文件系统属性（名称、大小、修改时间、扩展名等）的布尔表达式。字符串和正则默认只匹配名称，可开启「匹配完整路径」改为对整条路径匹配。仅匹配目录时按相对路径的数字自然排序，如1、2、10；文件及混合结果沿用文件系统顺序。"
 
     @classmethod
     def IS_CHANGED(cls, directory, **kwargs):
@@ -899,6 +914,12 @@ class MatchPath:
         except Exception:
             pass
 
+        if match_target == "目录":
+            # Sort directory tasks without changing the image sequence inside each task.
+            results.sort(key=lambda path: [
+                (1, int(part)) if part.isdecimal() else (0, part)
+                for part in re.split(r"(\d+)", str(Path(path).relative_to(root)))
+            ])
         return (results,)
 
 

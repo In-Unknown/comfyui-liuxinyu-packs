@@ -6,21 +6,23 @@ from pathlib import Path
 import numpy as np
 import torch
 from PIL import Image
+from PIL.PngImagePlugin import PngInfo
 import folder_paths
 from liuxinyu_cache import cached_preview, preview_path, rebuilding_preview
+from liuxinyu_image_bytes import EXTENSIONS, decode_frames, encode_frame, save_encoded
 
 
 class SaveSelectedFromBatch:
     DISPLAY_NAME = "从批次中选择保存图片"
-    _VALID_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+    _VALID_EXTS = set(EXTENSIONS)
     _PREFIX = "SaveSelectedFromBatch"
 
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {
-            "image": ("IMAGE", {"display_name": "图片", "tooltip": "要保存的输入图像批次。整批图片会先暂存到 ComfyUI 临时目录用于在节点上预览，然后根据「多选序列」自动保存到目标文件夹，或等待你在节点上勾选后手动保存。"}),
+            "image": ("IMAGE,IMAGE_BYTES", {"display_name": "图片", "tooltip": "接受图像张量或图像字节。张量批次逐张预览；每份字节作为一个文件，用首帧预览。自动或手动保存均使用原字节，同格式直接写入，不同格式转码。"}),
             "folder": ("STRING", {"default": "", "multiline": False, "display_name": "文件夹", "tooltip": "保存文件的绝对路径。仅预览时可留空；自动保存或点击「保存所选」前，需填写绝对路径，或点击「选择文件夹」按钮选择。"}),
-            "filename": ("STRING", {"default": "image.png", "multiline": False, "display_name": "文件名", "tooltip": "保存时使用的文件名前缀，需包含扩展名（支持 .png / .jpg / .jpeg / .webp / .bmp）。仅接受纯文件名，不能包含路径分隔符。保存时按 {stem}_{k}.{ext}（k 从 1 递增）的顺序写入目标文件夹；多次保存会追加编号，不会覆盖已有文件。"}),
+            "filename": ("STRING", {"default": "image.png", "multiline": False, "display_name": "文件名", "tooltip": "纯文件名，支持 .png/.jpg/.jpeg/.webp/.bmp/.tif/.tiff/.gif/.avif（需编码器支持）。同格式字节原样保存，不同格式转码。按 {stem}_{k}.{ext} 从1递增，不覆盖已有文件。"}),
             "selection": ("STRING", {"default": "", "multiline": False, "display_name": "多选序列", "tooltip": "可选。指定要自动保存的批次下标，0-based，以英文逗号分隔，例如 \"1,3,6,0\"。为空时进入手动选择模式，需在节点预览中勾选图片后点击「保存所选」按钮。非空时按这些下标自动保存到目标文件夹，但仍可继续手动勾选并触发额外保存。"}),
         }}
 
@@ -29,7 +31,7 @@ class SaveSelectedFromBatch:
     FUNCTION = "execute"
     OUTPUT_NODE = True
     CATEGORY = "image"
-    DESCRIPTION = "SaveSelectedFromBatch 节点将输入的整批图片先暂存到临时目录用于预览，再根据多选序列或手动勾选将选中的图片保存到指定绝对路径。仅预览时可留空保存文件夹，实际保存前再选择。"
+    DESCRIPTION = "预览IMAGE张量或IMAGE_BYTES，再按多选序列自动保存或手动保存所选。字节同格式直接写原文件，多帧预览首帧，跨格式多帧需先拆帧。仅预览可留空目录；相同输入不重复自动保存。"
 
     @staticmethod
     def _to_pil(image_tensor, ext):
@@ -49,8 +51,10 @@ class SaveSelectedFromBatch:
             img.save(path, format="WEBP", quality=95)
         elif ext == ".bmp":
             img.save(path, format="BMP")
-        else:
+        elif ext == ".png":
             img.save(path, format="PNG")
+        else:
+            Path(path).write_bytes(encode_frame(img, {"format": EXTENSIONS[ext]}))
 
     @staticmethod
     def _parse_selection(selection, batch_size):
@@ -123,9 +127,12 @@ class SaveSelectedFromBatch:
         ), self._render)
 
     def _render(self, image, folder, filename, selection):
-        if not isinstance(image, torch.Tensor) or image.ndim != 4:
+        encoded = isinstance(image, bytes)
+        if encoded:
+            first_frame = next(decode_frames(image))
+        elif not isinstance(image, torch.Tensor) or image.ndim != 4 or image.shape[0] == 0:
             raise ValueError("IMAGE 必须是 [B, H, W, C] 张量，请检查上游节点是否保留了批次维度。")
-        batch_size = image.shape[0]
+        batch_size = 1 if encoded else image.shape[0]
         indices = self._parse_selection(selection, batch_size)
         selected = set(indices)
         if indices:
@@ -135,8 +142,12 @@ class SaveSelectedFromBatch:
         ui_images = []
         for i in range(batch_size):
             preview_name = self._preview_name(session_id, i)
-            img = self._to_pil(image[i], ".png")
-            img.save(preview_path(preview_name), format="PNG")
+            img = first_frame if encoded else self._to_pil(image[i], ".png")
+            metadata = PngInfo()
+            if encoded:
+                Path(preview_path(preview_name + ".source")).write_bytes(image)
+                metadata.add_text("liuxinyu_image_bytes", "1")
+            img.save(preview_path(preview_name), format="PNG", pnginfo=metadata)
             ui_images.append({
                 "filename": preview_name,
                 "subfolder": "",
@@ -151,8 +162,11 @@ class SaveSelectedFromBatch:
             for offset, idx in enumerate(indices):
                 k = start_k + offset
                 target = Path(folder) / f"{stem}_{k}{suffix}"
-                img = self._to_pil(image[idx], ext)
-                self._save_image(img, target, ext)
+                if encoded:
+                    save_encoded(image, target, ext)
+                else:
+                    img = self._to_pil(image[idx], ext)
+                    self._save_image(img, target, ext)
                 auto_saved.append(str(target))
 
         ui = {"images": ui_images, "session_id": [session_id]}
@@ -201,7 +215,12 @@ class SaveSelectedFromBatch:
             k = start_k + len(saved)
             target = Path(folder) / f"{stem}_{k}{suffix}"
             with Image.open(src) as img:
-                if ext in {".jpg", ".jpeg"} and img.mode != "RGB":
+                if img.info.get("liuxinyu_image_bytes") == "1":
+                    source = temp_dir / (preview_name + ".source")
+                    if not source.is_file():
+                        return {"error": "原始图像字节缓存已失效，请重新执行节点后保存。", "saved": saved}
+                    save_encoded(source.read_bytes(), target, ext)
+                elif ext in {".jpg", ".jpeg"} and img.mode != "RGB":
                     with img.convert("RGB") as converted:
                         SaveSelectedFromBatch._save_image(converted, target, ext)
                 else:

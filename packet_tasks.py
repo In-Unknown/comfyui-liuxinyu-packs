@@ -41,8 +41,8 @@ class LiuxinyuPacketStart(io.ComfyNode):
     @classmethod
     def define_schema(cls):
         return io.Schema(
-            node_id="LiuxinyuPacketStart", display_name="分包执行子流回归", category="liuxinyu/流程控制",
-            description="只接受执行列表，逐项分包；普通数组须先接「将任意数组转为执行列表」。按最长列表逐包执行，短的非空列表重复最后一项。等待本包回归后再发下一包。当前轮次从 1 开始，嵌套时各自计数。将分包回归条件连接到回归分包子流条件节点。",
+            node_id="LiuxinyuPacketStart", display_name="分包执行·开始", category="liuxinyu/流程控制",
+            description="只接受执行列表，逐项分包；普通数组须先接「将任意数组转为执行列表」。按最长列表逐包执行，短的非空列表重复最后一项。等待本包回归后再发下一包。当前轮次从 1 开始，嵌套时各自计数。将分包回归条件连接到分包执行·结束节点。",
             is_input_list=True, accept_all_inputs=True, enable_expand=True, loop_boundary="start",
             inputs=value_inputs(),
             outputs=[CONDITION.Output(display_name="分包回归条件")] + value_outputs() + [io.Int.Output(display_name="当前轮次")],
@@ -63,11 +63,11 @@ class LiuxinyuPacketStart(io.ComfyNode):
                 require_execution_list(dynprompt, value, f"输入 {int(name[5:]) + 1}")
         columns, count = packet_columns(kwargs)
         if "_loop_end" not in opener:
-            raise ValueError("请将分包回归条件连接到「回归分包子流条件」，并把本包处理结果接入该回归节点。")
+            raise ValueError("请将分包回归条件连接到「分包执行·结束」，并把本包处理结果接入该回归节点。")
         close_id = opener["_loop_end"]
         close = dynprompt.get_node(close_id)
         if close["class_type"] != "LiuxinyuPacketEnd" or close["inputs"].get("condition") != [unique_id, 0]:
-            raise ValueError("回归节点的分包回归条件必须直接连接对应的「分包执行子流回归」。")
+            raise ValueError("回归节点的分包回归条件必须直接连接对应的「分包执行·开始」。")
         body = {key: dynprompt.get_node(key) for key in opener["_loop_body"]}
         used = {value[1] - 1 for node in [*body.values(), close] for value in node.get("inputs", {}).values()
                 if is_link(value) and value[0] == unique_id and 0 < value[1] <= MAX_SOCKETS}
@@ -91,7 +91,7 @@ class LiuxinyuPacketEnd(io.ComfyNode):
     @classmethod
     def define_schema(cls):
         return io.Schema(
-            node_id="LiuxinyuPacketEnd", display_name="回归分包子流条件", category="liuxinyu/流程控制",
+            node_id="LiuxinyuPacketEnd", display_name="分包执行·结束", category="liuxinyu/流程控制",
             description="等待本包所有已连接输入完成，再处理下一包。所有包完成后，各输出按包顺序汇总，保留数组值。",
             loop_boundary="end", is_input_list=True, accept_all_inputs=True, is_output_node=True,
             inputs=[CONDITION.Input("condition", display_name="分包回归条件")] + value_inputs(),

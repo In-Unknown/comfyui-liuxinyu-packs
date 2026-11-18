@@ -252,38 +252,28 @@ class LiuxinyuNumberConvert(io.ComfyNode):
             category='utils/conversion',
             search_aliases=['number convert', '数值转换', '转为数字', 'parse number'],
             description=(
-                '把输入转换为浮点数与整数。支持整数、浮点数、Decimal、布尔值、数字字符串，'
-                '以及一维数组。布尔值按 1/0 处理；字符串会去掉首尾空白后解析，空字符串或无法解析时报错；'
-                '数组逐项转换后按列表输出，下游可逐项执行。'
+                '每次把一个整数、浮点数、布尔值或数字字符串转换为一个浮点数和一个整数。'
+                '布尔值按 1/0 处理；字符串去掉首尾空白后解析，空字符串或无法解析时报错。'
+                '不接受或展开数组。执行列表由 ComfyUI 原生机制逐项调用；'
+                '数组须先显式连接「将任意数组转为执行列表」。'
             ),
             inputs=[
-                io.AnyType.Input(
+                io.MultiType.Input(
                     'value',
+                    types=[io.Int, io.Float, io.Boolean, io.String],
                     display_name='值',
-                    tooltip='可连接数字、字符串、布尔值或一维数组。',
+                    tooltip='只连接整数、浮点数、布尔值或数字字符串；不接受数组。标量执行列表按原生规则逐项转换。',
                 ),
             ],
             outputs=[
-                io.Float.Output(display_name='浮点数', is_output_list=True),
-                io.Int.Output(display_name='整数', is_output_list=True),
+                io.Float.Output(display_name='浮点数'),
+                io.Int.Output(display_name='整数'),
             ],
         )
 
     @classmethod
     def execute(cls, value):
-        floats = []
-        ints = []
-        if isinstance(value, list):
-            if not value:
-                raise ValueError('输入数组为空。')
-            for item in value:
-                if isinstance(item, list):
-                    raise ValueError('只支持一维数组；收到嵌套数组。')
-                f, i = _number_pair(item)
-                floats.append(f)
-                ints.append(i)
-        else:
-            f, i = _number_pair(value)
-            floats.append(f)
-            ints.append(i)
-        return io.NodeOutput(floats, ints)
+        if isinstance(value, (list, tuple)):
+            raise ValueError('数字转换不接受数组，请先连接「将任意数组转为执行列表」。')
+        floating, integer = _number_pair(value)
+        return io.NodeOutput(floating, integer)

@@ -1,0 +1,46 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const ctx = vm.createContext({});
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../activity_follow.js'), 'utf8').replace(/^export /gm, ''), ctx);
+const { ActivityFollow, followCardBottom } = vm.runInContext('({ActivityFollow, followCardBottom})', ctx);
+const follow = new ActivityFollow(), root = {}, a = {}, b = {};
+const sample = (time, ah, bh, jobId = 'run', width = 600, second = b, graph = root) => follow.sample([
+  { card: a, height: ah, jobId }, { card: second, height: bh, jobId }
+], time, graph, width);
+assert.equal(sample(0, 100, 100), null);
+assert.equal(sample(1000, 120, 120), null);
+assert.equal(sample(2000, 140, 140), null, 'Exactly 2s is not beyond the stable threshold');
+assert.equal(sample(2100, 160, 160), null, 'A single change is insufficient');
+assert.equal(sample(2300, 180, 180), b, 'Last displayed changing node wins');
+assert.equal(sample(2400, 200, 180), b, 'Target does not oscillate between alternating stream updates');
+assert.equal(sample(4200, 220, 180), b);
+assert.equal(sample(4400, 240, 180), a, 'Expired last node yields to still-changing earlier node');
+assert.equal(sample(6500, 240, 180), null, 'Idle period hides control');
+assert.equal(sample(6600, 260, 180), null, 'A later isolated resize is not continuous');
+assert.equal(sample(6800, 260.2, 180), null, 'Subpixel jitter is ignored');
+assert.equal(sample(6900, 280, 180), a);
+follow.enabled = false;
+assert.equal(sample(7000, 300, 180, 'new-run'), null, 'New execution resets even with identical objects');
+assert.equal(follow.enabled, false, 'Reset never overrides user preference');
+assert.equal(sample(9200, 320, 180, 'new-run'), null);
+assert.equal(sample(9400, 340, 180, 'new-run'), a);
+assert.equal(sample(9500, 360, 180, 'new-run', 500), null, 'Width reflow resets');
+assert.equal(sample(12000, 380, 180, 'new-run', 500, {}), null, 'Object replacement resets');
+assert.equal(sample(15000, 400, 180, 'new-run', 500, b, {}), null, 'Workflow replacement resets');
+assert.equal(follow.sample([], 16000, root, 500), null, 'Empty membership clears target');
+assert.equal(sample(18000, 400, 180), null, 'Added nodes restart stability timer');
+assert.equal(sample(20100, 380, 180), null);
+assert.equal(sample(20300, 360, 180), a, 'Shrinking nodes count too');
+const content = { scrollTop: 100, scrollHeight: 2200, clientHeight: 400, clientTop: 1,
+  getBoundingClientRect: () => ({ top: 50 }) };
+const element = { getBoundingClientRect: () => ({ bottom: 900 - content.scrollTop }) };
+assert.equal(followCardBottom(content, element), true);
+assert.equal(content.scrollTop, 461, 'Only container scrollTop moves to node bottom + padding');
+assert.equal(followCardBottom(content, element), false, 'Already aligned avoids redundant scroll');
+element.getBoundingClientRect = () => ({ bottom: 10000 });
+followCardBottom(content, element); assert.equal(content.scrollTop, 1800);
+element.getBoundingClientRect = () => ({ bottom: -10000 });
+followCardBottom(content, element); assert.equal(content.scrollTop, 0);
+console.log('PASS: stable objects, continuous geometry, last node, idle, reset, preference and confined scrolling');

@@ -1,0 +1,72 @@
+.lxy-function-info {
+  display: flex; align-items: center; gap: 12px; height: 32px; width: 100%; box-sizing: border-box; padding: 0 8px;
+  font: 12px/1.4 system-ui, sans-serif; color: var(--input-text, #dedee3);
+}
+.lxy-function-info-trigger, .lxy-analysis-close {
+  box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer; font: inherit; color: inherit; background: transparent;
+  border: 1px solid var(--border-color, #555); border-radius: 6px; flex-shrink: 0;
+}
+.lxy-function-info-trigger {
+  gap: 4px; height: 30px; padding: 8px;
+  font: 400 12px/1 system-ui, sans-serif; letter-spacing: normal;
+}
+.lxy-function-info-trigger:hover, .lxy-analysis-close:hover { background: var(--comfy-input-bg, #383838); }
+.lxy-function-info-trigger[aria-expanded="true"] {
+  background: var(--comfy-input-bg, #383838); border-color: var(--input-text, #ddd);
+}
+.lxy-function-info-trigger:focus-visible, .lxy-analysis-close:focus-visible, .lxy-analysis-details summary:focus-visible {
+  outline: 2px solid var(--p-primary-color, #82b5e8); outline-offset: 2px;
+}
+.lxy-function-info-icon {
+  display: block; width: 1em; height: 1em; flex: 0 0 1em;
+}
+.lxy-function-info-label { display: block; line-height: 1; white-space: nowrap; }
+.lxy-function-info-status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .7; }
+.lxy-function-info[data-phase="error"] .lxy-function-info-status { color: var(--error-text, #f0a49a); opacity: 1; }
+.lxy-analysis-popover {
+  position: fixed; z-index: 10000; box-sizing: border-box; display: flex; flex-direction: column;
+  transform-origin: top left;
+  color: var(--input-text, #dedee3); background: var(--comfy-menu-bg, #242424);
+  border: 1px solid var(--border-color, #555); border-radius: 9px;
+  box-shadow: 0 8px 28px #0005, 0 1px 4px #0004; font: 13px/1.55 system-ui, sans-serif;
+}
+.lxy-analysis-popover::before {
+  content: ""; position: absolute; left: var(--arrow-x); width: 10px; height: 10px;
+  background: var(--comfy-menu-bg, #242424); border: solid var(--border-color, #555);
+  border-width: 0 1px 1px 0; transform: translateX(-50%) rotate(45deg);
+}
+.lxy-analysis-popover[data-side="above"]::before { bottom: -6px; }
+.lxy-analysis-popover[data-side="below"]::before { top: -6px; transform: translateX(-50%) rotate(225deg); }
+.lxy-analysis-header {
+  box-sizing: border-box;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  flex-shrink: 0; height: 44px; padding: 0 12px 0 16px; border-bottom: 1px solid var(--border-color, #555);
+}
+.lxy-analysis-close { border: 0; width: 28px; height: 28px; font-size: 20px; }
+.lxy-analysis-body { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 14px 16px; scrollbar-width: thin; }
+.lxy-analysis-body p { margin: 6px 0 0; }
+.lxy-analysis-message strong { font-size: 14px; }
+.lxy-analysis-message p { opacity: .75; }
+.lxy-analysis-series + .lxy-analysis-series { border-top: 1px solid var(--border-color, #555); margin-top: 16px; padding-top: 14px; }
+.lxy-analysis-series-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.lxy-analysis-series-heading strong { font-size: 14px; overflow-wrap: anywhere; }
+.lxy-analysis-verdict { font-size: 12px; }
+.lxy-analysis-verdict[data-tone="success"] { color: var(--success-text, #8acfa6); }
+.lxy-analysis-verdict[data-tone="danger"] { color: var(--error-text, #f0a49a); }
+.lxy-analysis-meta { font-size: 12px; opacity: .65; }
+.lxy-analysis-formula { display: block; margin-top: 10px; padding: 8px 10px; background: var(--comfy-input-bg, #303030); border-radius: 5px; font: 12px/1.6 ui-monospace, monospace; overflow-wrap: anywhere; white-space: pre-wrap; }
+.lxy-analysis-properties { margin: 12px 0; }
+.lxy-analysis-properties dt { font-size: 12px; opacity: .65; margin-top: 10px; }
+.lxy-analysis-properties dd { margin: 3px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.lxy-analysis-details { border-top: 1px solid var(--border-color, #555); }
+.lxy-analysis-details summary { cursor: pointer; padding: 9px 0; font-size: 12px; }
+.lxy-analysis-details .lxy-analysis-properties { margin-top: 0; padding-left: 12px; }
+.lxy-analysis-calculations { margin: 8px 0 12px; padding-left: 22px; }
+.lxy-analysis-calculations li { margin: 12px 0; }
+.lxy-analysis-calculations li, .lxy-analysis-conclusion { overflow-wrap: anywhere; }
+.lxy-analysis-conclusion { font-weight: 500; }
+.lxy-analysis-calculations strong { font-size: 12px; font-weight: 500; }
+.lxy-analysis-measurements dd { font-variant-numeric: tabular-nums; font-family: ui-monospace, monospace; }
+.lxy-analysis-note, .lxy-analysis-footnote { font-size: 12px; opacity: .7; overflow-wrap: anywhere; }
+.lxy-analysis-body .lxy-analysis-footnote { border-top: 1px solid var(--border-color, #555); margin-top: 14px; padding-top: 12px; }

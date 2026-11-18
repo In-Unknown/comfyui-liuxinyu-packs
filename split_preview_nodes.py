@@ -227,7 +227,7 @@ def _normalize_boundaries(items, length):
     if not isinstance(items, list):
         raise ValueError('切分数组只支持 [0.1, 0.2] 或 [{"percent": 10}, {"percent": 20}]，不要用对象包裹数组。')
     if not items:
-        raise ValueError("切分数组不能为空。")
+        return []
     object_array = isinstance(items[0], dict)
     if any(isinstance(item, dict) != object_array for item in items):
         raise ValueError("切分数组请统一使用数值比例或 percent 对象，不要混合两种写法。")
@@ -376,12 +376,13 @@ class LiuxinyuSplitBoundaryPreview(io.ComfyNode):
             description=(
                 "按切分数组为每个边界生成检查图。上下切分：标尺在左、放大图在顶部；"
                 "左右切分：标尺在底部、标尺附近的放大图在左侧，数字保持横向。边界放大范围沿切分方向向两侧延伸。"
+                "空数组 [] 表示没有切线，逐张返回无标尺整图，供复核是否无需切分。"
                 "切分数组只支持 [0.1, 0.2] 或 [{\"percent\": 10}, {\"percent\": 20}]，均表示整张图 10%、20% 的位置。"
             ),
             inputs=[
                 io.Image.Input("image", display_name="图片"),
                 io.Array.Input("boundaries", display_name="切分数组",
-                               tooltip="仅支持数值数组 [0.1, 0.2]（0 < 数值 < 1）或对象数组 [{\"percent\": 10}, {\"percent\": 20}]（0 < percent < 100，name 可选）。位置按整张图及当前切分方向计算，自动补齐两端。"),
+                               tooltip="支持数值数组 [0.1, 0.2]（0 < 数值 < 1）或对象数组 [{\"percent\": 10}, {\"percent\": 20}]（0 < percent < 100，name 可选）。位置按整张图及当前切分方向计算；[] 逐张返回无标尺整图供复核。"),
                 io.Int.Input("crop_margin", display_name="边界放大范围", default=BOUNDARY_CROP_MARGIN, min=50, max=2000),
                 _direction_input(),
             ],
@@ -406,6 +407,9 @@ class LiuxinyuSplitBoundaryPreview(io.ComfyNode):
         pil = _tensor_to_pil(frame)
         height, width = pil.height, pil.width
         items = _normalize_boundaries(boundaries, width if horizontal else height)
+        if not items:
+            # No cut is a valid decision: keep the complete image available for review.
+            return [frame.unsqueeze(0).clone()]
         if horizontal:
             return _horizontal_boundary_previews(pil, items, crop_margin)
 
@@ -488,12 +492,12 @@ class LiuxinyuSplitSegments(io.ComfyNode):
             description=(
                 "按切分数组把长图切成多段，返回纯切图列表，不带标尺和标签，可直接用于下游生成或拼接。"
                 "切分数组只支持 [0.1, 0.2] 或 [{\"percent\": 10}, {\"percent\": 20}]，均表示整张图 10%、20% 的位置。"
-                "默认从上到下，也可从左到右，自动补齐图像两端。"
+                "默认从上到下，也可从左到右，自动补齐图像两端。空数组 [] 表示不切分，逐张返回整图。"
             ),
             inputs=[
                 io.Image.Input("image", display_name="图片"),
                 io.Array.Input("boundaries", display_name="切分数组",
-                               tooltip="仅支持数值数组 [0.1, 0.2]（0 < 数值 < 1）或对象数组 [{\"percent\": 10}, {\"percent\": 20}]（0 < percent < 100，name 可选）。位置按整张图及当前切分方向计算，自动补齐两端。"),
+                               tooltip="支持数值数组 [0.1, 0.2]（0 < 数值 < 1）或对象数组 [{\"percent\": 10}, {\"percent\": 20}]（0 < percent < 100，name 可选）。位置按整张图及当前切分方向计算，自动补齐两端；[] 逐张保留整图。"),
                 _direction_input(),
             ],
             outputs=[io.Image.Output(display_name="切分结果", is_output_list=True)],

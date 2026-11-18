@@ -16,7 +16,7 @@
 | --- | --- | --- |
 | `执行列表` | 按输入数组顺序输出第一层元素，每个元素为一个执行项；保留重复项、原始类型和对象引用 | ANY（执行列表） |
 
-ANY 说明每项允许任意类型；本输出明确声明为执行列表。它可以接[分包执行子流回归](LiuxinyuPacketStart.md)的输入，或[分包跳回](LiuxinyuPacketReturnStart.md)的分包数据口。
+ANY 说明每项允许任意类型；本输出明确声明为执行列表。它可以接[分包执行·开始](LiuxinyuPacketStart.md)的输入，或[携包循环·开始](LiuxinyuPacketReturnStart.md)的分包数据口。
 
 ## 示例：逐项读取记录路径
 

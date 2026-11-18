@@ -1,0 +1,26 @@
+.liuxinyu-activity-selected > :not(.liuxinyu-activity-page) { display: none !important; }
+.liuxinyu-activity-page {
+  display: flex; flex-direction: column; height: 100%; min-height: 0;
+  background: var(--comfy-menu-bg, #171717); color: var(--fg-color, #ddd);
+}
+.liuxinyu-activity-page[hidden], [data-testid="panel-tab-activity"][hidden], .liuxinyu-activity-empty[hidden] { display: none; }
+.liuxinyu-activity-content { flex: 1; min-height: 0; overflow: auto; padding: 12px; scrollbar-gutter: stable; }
+.liuxinyu-activity-content { overflow-anchor: none; scroll-behavior: auto; }
+.liuxinyu-activity-follow { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 16px; font-size: 13px; }
+.liuxinyu-activity-follow[hidden] { display: none; }
+/* Low-specificity fallback for older frontends without the native Switch utilities. */
+:where(.liuxinyu-activity-follow button) { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 24px; padding: 0; border: 0; border-radius: 999px; background: transparent; cursor: pointer; }
+:where(.liuxinyu-activity-follow button > span) { display: inline-flex; box-sizing: border-box; align-items: center; width: 36px; height: 20px; padding: 0 2px; border: 1px solid transparent; border-radius: 999px; background: var(--color-interface-stroke, var(--border-color, #555)); }
+:where(.liuxinyu-activity-follow button[data-state="checked"] > span) { background: var(--color-primary-background, var(--p-primary-color, #0b8ce9)); }
+:where(.liuxinyu-activity-follow button > span > span) { display: block; width: 16px; height: 16px; border-radius: 999px; background: var(--color-base-background, var(--comfy-menu-bg, #171717)); transition: transform 150ms; }
+:where(.liuxinyu-activity-follow button > span > span[data-state="checked"]) { translate: 14px 0; }
+:where(.liuxinyu-activity-follow button:focus-visible) { outline: 1px solid var(--color-border-default, var(--fg-color, #ddd)); outline-offset: 2px; }
+:where(.liuxinyu-activity-follow button:active) { scale: 0.9; }
+.liuxinyu-activity-grid { display: flex; flex-wrap: wrap; align-items: flex-start; align-content: flex-start; gap: 16px; }
+.liuxinyu-activity-empty { margin: 32px 0; text-align: center; color: #888; font-size: 13px; }
+.liuxinyu-activity-node { position: relative; flex: 0 1 auto; min-width: 0; max-width: 100%; overflow-x: auto; padding: 4px; cursor: pointer; outline: none; }
+.liuxinyu-activity-node:focus-visible { outline: 1px solid var(--input-text, #bbb); border-radius: 8px; }
+.liuxinyu-activity-node[data-error]::after { content: attr(data-error); display: block; padding: 12px; color: #f4c078; overflow-wrap: anywhere; }
+.liuxinyu-activity-surface { position: relative; pointer-events: none; }
+.liuxinyu-activity-tile, .liuxinyu-activity-dom { position: absolute; pointer-events: none; }
+.liuxinyu-activity-dom { z-index: 1; }

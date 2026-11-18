@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WindowsPerformanceRecorder Version="1.0" Author="liuxinyu">
+  <Profiles>
+    <SystemCollector Id="Images" Name="Liuxinyu Focus Images">
+      <BufferSize Value="64"/><Buffers Value="128"/>
+    </SystemCollector>
+    <EventCollector Id="Events" Name="Liuxinyu Focus Events">
+      <BufferSize Value="64"/><Buffers Value="128"/>
+    </EventCollector>
+    <SystemProvider Id="ImageProvider">
+      <Keywords><Keyword Value="ProcessThread"/><Keyword Value="Loader"/></Keywords>
+    </SystemProvider>
+    <EventProvider Id="FocusProvider" Name="8c416c79-d49b-4f01-a467-e56d3aa8234c" Level="5" Stack="true" NonPagedMemory="true">
+      <Keywords><Keyword Value="0x22000"/></Keywords>
+    </EventProvider>
+    <Profile Id="LiuxinyuFocus.Verbose.Memory" Name="LiuxinyuFocus" Description="Focus transitions, user activity, stacks and module mapping" LoggingMode="Memory" DetailLevel="Verbose">
+      <Collectors>
+        <SystemCollectorId Value="Images"><SystemProviderId Value="ImageProvider"/></SystemCollectorId>
+        <EventCollectorId Value="Events"><EventProviders><EventProviderId Value="FocusProvider"/></EventProviders></EventCollectorId>
+      </Collectors>
+    </Profile>
+  </Profiles>
+</WindowsPerformanceRecorder>

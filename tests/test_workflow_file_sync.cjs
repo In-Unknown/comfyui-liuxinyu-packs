@@ -22,6 +22,7 @@ function harness({ savedAt = 1000, modified = 2000, server = graph('server'), st
   const requests = [];
   const loads = [];
   const warnings = [];
+  const removedWarnings = [];
   let extension, menuExtension, nextTimer = 0;
   const now = 5000;
   storage ||= new Map();
@@ -89,8 +90,10 @@ function harness({ savedAt = 1000, modified = 2000, server = graph('server'), st
     addEventListener(name, cb) { listeners[name] = cb; },
     async fetchApi(url, options) {
       requests.push({ url, options });
+      if (state.fetchError) throw state.fetchError;
       return { ok: !state.failFetch, status: state.failFetch ? 503 : 200,
-        async json() { return [{ path: 'test.json', modified: state.modified, size: 80 }]; } };
+        async text() { return 'Service temporarily unavailable'; },
+        async json() { return state.missingFile ? [] : [{ path: 'test.json', modified: state.modified, size: 80 }]; } };
     },
     async getUserData(p, options) {
       requests.push({ path: p, options });
@@ -103,7 +106,7 @@ function harness({ savedAt = 1000, modified = 2000, server = graph('server'), st
   };
   const app = {
     rootGraph: { serialize: () => copy(state.canvas) },
-    extensionManager: { workflow: workflows, toast: { add: (v) => warnings.push(v) } },
+    extensionManager: { workflow: workflows, toast: { add: (v) => warnings.push(v), remove: (v) => removedWarnings.push(v) } },
     registerExtension(e) { if (e.name === 'liuxinyu.MenuSource') menuExtension = e; else extension = e; },
     async loadGraphData(data, clean, restoreView, target) {
       loads.push(copy(data));
@@ -161,7 +164,7 @@ function harness({ savedAt = 1000, modified = 2000, server = graph('server'), st
   }
   return { extension, menuExtension, workflow, workflows, drafts, payloads, state, storage,
     load: (data) => app.loadGraphData(data, true, true, workflow),
-    dialogs, requests, loads, warnings, listeners, actions, restore, flush, intervals, document, frames };
+    dialogs, requests, loads, warnings, removedWarnings, listeners, actions, restore, flush, intervals, document, frames };
 }
 
 test('ordinary open and repeated save/reload capture initialized nested Switch sockets', async () => {
@@ -592,6 +595,41 @@ test('manual canvas command offers the same file again after cancelling', async 
   assert.equal(h.workflow.isModified, false);
 });
 
+test('manual differing content describes older, newer and equal file timestamps accurately', async () => {
+  for (const [modified, button, message] of [
+    [900, '还原为文件内容', /前端保存时间比后端文件修改时间新/],
+    [2000, '加载后端文件内容', /后端文件修改时间比前端保存时间新/],
+    [1000, '加载后端文件内容', /仅凭这些时间无法判断内容的新旧/],
+  ]) {
+    const h = harness({ modified }); await h.restore();
+    if (h.dialogs.length) { h.dialogs[0].close('keep'); await h.flush(); }
+    h.menuExtension.getCanvasMenuItems()[0].callback(); await h.flush();
+    const dialog = h.dialogs.at(-1);
+    assert.equal(dialog.children.at(-1).children[1].textContent, button);
+    assert.match(dialog.children[1].textContent, message);
+    assert.match(dialog.children[1].textContent, /不会写入后端文件/);
+    assert.doesNotMatch(dialog.children[1].textContent, /最新内容/);
+    if (modified < 1000) assert.match(dialog.children[0].textContent, /前端保存较新/);
+    const before = JSON.stringify({ canvas: h.state.canvas, drafts: [...h.payloads] });
+    dialog.children.at(-1).children[0].onclick(); await h.flush();
+    assert.equal(h.loads.length, 0);
+    assert.equal(JSON.stringify({ canvas: h.state.canvas, drafts: [...h.payloads] }), before);
+  }
+});
+
+test('restore older file loads backend content only after confirmation', async () => {
+  const h = harness({ modified: 900 }); await h.restore();
+  h.menuExtension.getCanvasMenuItems()[0].callback(); await h.flush();
+  assert.equal(h.loads.length, 0);
+  const originalServer = copy(h.state.server);
+  h.dialogs[0].children.at(-1).children[1].onclick(); await h.flush();
+  assert.deepEqual(h.state.canvas, originalServer);
+  assert.deepEqual(h.state.server, originalServer);
+  assert.equal(h.workflow.isModified, false);
+  assert.equal(h.payloads.has(h.workflow.path), false);
+  assert(h.requests.every(request => !request.options?.method || request.options.method === 'GET'));
+});
+
 test('manual check after saving identical content reports no update without changing canvas or draft', async () => {
   const h = harness({ modified: 900 }); await h.restore();
   h.state.server = copy(h.state.canvas);
@@ -653,8 +691,94 @@ test('manual read failure or invalid workflow never claims equal or changes the 
     assert.equal(h.dialogs.length, 0);
     assert.equal(h.loads.length, 0);
     assert.equal(h.warnings.at(-1).severity, 'warn');
+    assert.equal(h.warnings.at(-1).summary, '工作流文件检查失败');
+    assert.match(h.warnings.at(-1).detail, /workflows\/test.json/);
+    assert.doesNotMatch(h.warnings.at(-1).detail, /请稍后切回页面重试/);
     assert.equal(JSON.stringify({ workflow: h.workflow, canvas: h.state.canvas, drafts: [...h.payloads] }), before);
   }
+});
+
+test('automatic failures stay visibly unresolved without repeated toasts and clear only after recovery', async () => {
+  for (const failure of ['failFetch', 'fetchError']) {
+    const h = harness();
+    h.state[failure] = failure === 'fetchError' ? new TypeError('Failed to fetch') : true;
+    const before = JSON.stringify({ canvas: h.state.canvas, baseline: h.workflow.changeTracker.initialState });
+    await h.restore();
+    h.listeners.focus(); await h.flush();
+    h.listeners.reconnected(); await h.flush();
+    for (const interval of h.intervals) interval();
+    await h.flush();
+    assert.equal(h.warnings.length, 1);
+    assert.equal(h.warnings[0].summary, '工作流文件检查未完成');
+    assert.equal(h.warnings[0].life, undefined, 'Unresolved warning does not expire');
+    assert.match(h.warnings[0].detail, /尚未确认后端文件是否有变动/);
+    assert.match(h.warnings[0].detail, /请求：GET \/userdata\?/);
+    assert.equal(h.removedWarnings.length, 0);
+    assert.equal(h.loads.length, 0);
+    assert.equal(JSON.stringify({ canvas: h.state.canvas, baseline: h.workflow.changeTracker.initialState }), before);
+    h.state[failure] = false;
+    h.listeners.reconnected(); await h.flush();
+    assert.equal(h.dialogs.length, 1, 'Automatic checks resume after connectivity recovers');
+    assert.equal(h.removedWarnings[0], h.warnings[0]);
+    h.dialogs[0].close('keep'); await h.flush();
+  }
+});
+
+test('known disconnection pauses background requests and reconnect failure stays reported', async () => {
+  const h = harness({ modified: 900 }); await h.restore();
+  h.listeners.reconnecting(); await h.flush();
+  const count = h.requests.length;
+  h.listeners.focus(); await h.flush();
+  for (const interval of h.intervals) interval();
+  await h.flush();
+  assert.equal(h.requests.length, count, 'Do not issue background HTTP checks while websocket is disconnected');
+  assert.equal(h.warnings.length, 1);
+  assert.match(h.warnings[0].detail, /连接已断开/);
+  h.state.failFetch = true;
+  h.listeners.reconnected(); await h.flush();
+  assert.equal(h.warnings.length, 2);
+  assert.match(h.warnings[1].detail, /503/);
+  assert.match(h.warnings[1].detail, /Service temporarily unavailable/);
+  assert.equal(h.removedWarnings[0], h.warnings[0]);
+  for (const interval of h.intervals) interval();
+  await h.flush();
+  assert.equal(h.warnings.length, 2, 'Repeated failure is not repeatedly added');
+  h.state.failFetch = false;
+  for (const interval of h.intervals) interval();
+  await h.flush();
+  assert.equal(h.removedWarnings[1], h.warnings[1]);
+  assert.equal(h.loads.length, 0);
+});
+
+test('missing files and invalid metadata cannot clear an unresolved check', async () => {
+  const h = harness({ modified: 900 }); await h.restore();
+  for (const field of ['missingFile', 'modified']) {
+    h.state[field] = field === 'missingFile' ? true : null;
+    h.listeners.focus(); await h.flush();
+    assert.equal(h.warnings.at(-1).summary, '工作流文件检查未完成');
+    assert.match(h.warnings.at(-1).detail, field === 'missingFile' ? /未找到/ : /修改时间/);
+    assert.notEqual(h.removedWarnings.at(-1), h.warnings.at(-1));
+    h.state.missingFile = false;
+  }
+  h.state.modified = 900; h.listeners.focus(); await h.flush();
+  assert.equal(h.removedWarnings.at(-1), h.warnings.at(-1));
+});
+
+test('manual network error and a confirmed automatic sync report the actual failure', async () => {
+  const h = harness({ modified: 900 }); await h.restore();
+  h.state.fetchError = new TypeError('Failed to fetch');
+  h.menuExtension.getCanvasMenuItems()[0].callback(); await h.flush();
+  assert.equal(h.warnings.at(-1).summary, '工作流文件检查失败');
+  assert.match(h.warnings.at(-1).detail, /读取后端文件信息失败：Failed to fetch/);
+
+  h.state.fetchError = null; h.state.modified = 2000;
+  h.listeners.reconnected(); await h.flush();
+  h.state.failFetch = true;
+  h.dialogs[0].children.at(-1).children[1].onclick(); await h.flush();
+  assert.equal(h.warnings.at(-1).summary, '工作流文件同步未完成');
+  assert.match(h.warnings.at(-1).detail, /重新读取后端文件信息失败：文件信息读取失败 \(503\)/);
+  assert.equal(h.loads.length, 0);
+  assert.equal(h.payloads.has(h.workflow.path), true);
 });
 
 test('navigation while manual content read is pending suppresses stale results', async () => {

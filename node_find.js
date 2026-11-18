@@ -1,3 +1,4 @@
+import { visibleCanvasArea, centerCanvasOn } from "./canvas_viewport.js";
 import { app } from "../../scripts/app.js";
 
 const definitions = new WeakMap();
@@ -6,7 +7,7 @@ function rootGraph() {
   return app.rootGraph || app.canvas?.graph?.rootGraph || app.graph;
 }
 
-function findNodes(root, query) {
+export function findNodes(root, query) {
   const text = query.trim();
   if (!text) return [];
   const id = text.replace(/^#/, "");
@@ -38,6 +39,14 @@ let returnRoute;
 let viewChange = 0;
 let revealing = false;
 
+export function isCurrentGraphLocation(match) {
+  if (match.root !== rootGraph() || match.graph !== app.canvas?.graph) return false;
+  if (!match.hosts.length) return true;
+  const hosts = returnRoute?.root === match.root ? returnRoute.hosts : [];
+  const depth = hosts.findIndex(host => host.subgraph === app.canvas.graph) + 1;
+  return depth === match.hosts.length && match.hosts.every((host, index) => host === hosts[index]);
+}
+
 function onSubgraphOpened(event) {
   if (revealing) return;
   const host = event.detail?.fromNode;
@@ -50,16 +59,19 @@ function onSubgraphOpened(event) {
   if (parentHosts) returnRoute = { root, hosts: [...parentHosts, host] };
 }
 
-function focusNode(canvas, node) {
-  const ratio = window.devicePixelRatio || 1;
-  // A normal node is shown at approximately the screenshot's 190% zoom.
-  // Reserve space for its title/badges, and fit large nodes inside the viewport.
+function fitNodeToVisibleArea(canvas, node) {
+  const area = visibleCanvasArea(canvas);
+  if (area.width <= 0 || area.height <= 0) return;
   const scale = Math.min(1.9,
-    canvas.canvas.width / ratio * 0.8 / (node.size[0] + 40),
-    canvas.canvas.height / ratio * 0.8 / (node.size[1] + 80));
+    area.width * 0.8 / (node.size[0] + 40),
+    area.height * 0.8 / (node.size[1] + 80));
   canvas.setZoom(scale);
+  centerCanvasOn(canvas, node.pos[0] + node.size[0] / 2, node.pos[1] + node.size[1] / 2, area);
+}
+
+function focusNode(canvas, node) {
   canvas.selectNode(node);
-  canvas.centerOnNode(node);
+  fitNodeToVisibleArea(canvas, node);
 }
 
 async function onGraphChange(event) {
@@ -79,7 +91,7 @@ async function onGraphChange(event) {
   focusNode(app.canvas, host);
 }
 
-async function revealNode(match) {
+export async function revealNode(match) {
   const canvas = app.canvas;
   const ticket = ++navigation;
   const current = findNodes(rootGraph(), match.path).find(item => item.node === match.node);
@@ -90,7 +102,7 @@ async function revealNode(match) {
   // Use the same graph events as native subgraph navigation, so breadcrumbs and
   // viewport caches follow the canvas. Wait for native fit/restore before centering.
   try {
-    if (canvas.graph !== match.graph) {
+    if (canvas.graph !== match.graph || current.hosts.length > 0) {
       canvas.setGraph(match.root);
       await frame();
       for (const host of current.hosts) {
@@ -108,6 +120,10 @@ async function revealNode(match) {
       throw new Error("节点已被删除，请重新查找。");
     }
     focusNode(canvas, match.node);
+    // Selection can switch the inspector and update its layout on the next frame.
+    await frame();
+    if (!active() || canvas.graph !== match.graph) return false;
+    fitNodeToVisibleArea(canvas, match.node);
     returnRoute = current;
     return true;
   } finally {

@@ -1,15 +1,38 @@
 __pycache__/
 *.pyc
 *.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
 *.egg-info/
 dist/
 build/
 .venv/
 venv/
 .env
+.env.*
+!.env.example
 .trae/
 pyrightconfig.json
 *.bak
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+*.log
+*.etl
+node_modules/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Generated focus captures; keep diagnostics scripts and tracing profiles.
+/diagnostics/focus*.jsonl*
+/diagnostics/focus-incident-*.json
 
 # Local workflow snapshot used during debugging.
 /_wf_detail.json

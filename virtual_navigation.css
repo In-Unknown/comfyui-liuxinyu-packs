@@ -1,0 +1,28 @@
+.lxy-virtual-jump {
+  position: fixed; z-index: 4; width: 24px; height: 24px; padding: 4px;
+  display: flex; align-items: center; justify-content: center; box-sizing: border-box;
+  border: 0; border-radius: 5px; color: var(--input-text, #dedee3);
+  background: var(--comfy-menu-bg, #252525); cursor: pointer; transform-origin: top left;
+}
+.lxy-virtual-jump[hidden] { display: none; }
+.lxy-virtual-jump svg { width: 16px; height: 16px; display: block; flex: none; }
+.lxy-virtual-jump path { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.lxy-virtual-jump:hover, .lxy-virtual-jump[aria-expanded="true"] { background: var(--comfy-input-bg, #404040); }
+.lxy-virtual-jump:disabled { opacity: .35; cursor: default; }
+.lxy-virtual-jump:focus-visible, .lxy-virtual-target:focus-visible { outline: 2px solid var(--p-primary-color, #82b5e8); outline-offset: 1px; }
+.lxy-virtual-targets {
+  position: fixed; z-index: 1001; width: 340px; max-height: 300px;
+  padding: 5px; box-sizing: border-box; overflow: auto; overscroll-behavior: contain;
+  transform-origin: top left; border: 1px solid var(--border-color, #555); border-radius: 9px;
+  color: var(--input-text, #dedee3); background: var(--comfy-menu-bg, #252525);
+  box-shadow: 0 6px 22px #0005; font: 12px/1.45 system-ui, sans-serif;
+}
+.lxy-virtual-target {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 12px;
+  width: 100%; padding: 8px 10px; margin: 0; border: 0; border-radius: 5px;
+  text-align: left; font: inherit; color: inherit; background: transparent; cursor: pointer;
+}
+.lxy-virtual-target:hover, .lxy-virtual-target:focus-visible { background: var(--comfy-input-bg, #383838); }
+.lxy-virtual-target-name { font-weight: 500; overflow-wrap: anywhere; }
+.lxy-virtual-target-id { opacity: .7; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; max-width: 140px; }
+.lxy-virtual-target-location { grid-column: 1 / -1; opacity: .65; font-size: 11px; overflow-wrap: anywhere; }

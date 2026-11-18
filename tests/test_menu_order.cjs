@@ -69,7 +69,7 @@ assert.deepEqual(clean(reordered.menu.getCanvasMenuItems().map(item => item.cont
 
 // Exercise a real producer through the shared entry point, including its callback.
 const viewport = harness();
-vm.runInContext(source('viewport_origin.js'), viewport.scope);
+vm.runInContext(source('canvas_viewport.js')+'\n'+source('viewport_origin.js'), viewport.scope);
 assert.equal(viewport.menu.getCanvasMenuItems().length, 0);
 let redraw = 0;
 viewport.scope.window = { devicePixelRatio: 1 };

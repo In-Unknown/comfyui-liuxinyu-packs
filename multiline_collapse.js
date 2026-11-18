@@ -46,6 +46,9 @@ function setup(node) {
         Object.defineProperty(widget, "_liuxinyuMultilineCollapsed", {
           configurable: true, get: () => entry.collapsed,
         });
+        Object.defineProperty(widget, "_liuxinyuMultilineCompact", {
+          configurable: true, get: () => entry.compact,
+        });
       }
       // Configure/promoted widgets can replace either object. Resolve the current
       // slot each time instead of treating its array index as a permanent identity.
@@ -79,7 +82,7 @@ function setup(node) {
     // The editor stays hidden, but native layout assigns its socket a compact row
     // instead of retaining the old widget.y and leaving a gap or overlapping.
     const widgets = this.widgets || [];
-    return [...widgets.filter(widget => included.has(widget) || state.entries.get(widget)?.compact),
+    return [...widgets.filter(widget => included.has(widget) || widget._liuxinyuMultilineCompact),
       ...visible.filter(widget => !widgets.includes(widget))];
   };
   const computeSize = node.computeSize;
@@ -111,13 +114,12 @@ function setup(node) {
     if (options.lowQuality || this.flags?.collapsed) return result;
     ctx.save();
     ctx.textAlign = "left";
-    for (const entry of state.entries.values()) {
-      if (!entry.compact) continue;
-      const index = this.inputs.indexOf(entry.input);
-      if (index < 0) continue;
+    for (const [index, input] of (this.inputs || []).entries()) {
+      // Resolve against the node being drawn: activity mirrors have copied slots/widgets.
+      if (!widgetForInput(this, input)?._liuxinyuMultilineCompact) continue;
       const [x, y] = this.getInputPos(index);
       ctx.fillStyle = this.mouseOver?.inputId === index ? "#fff" : (globalThis.LiteGraph?.NODE_TEXT_COLOR || "#aaa");
-      ctx.fillText(entry.input.label || entry.input.localized_name || entry.input.name,
+      ctx.fillText(input.label || input.localized_name || input.name,
         x - this.pos[0] + 10, y - this.pos[1] + 5);
     }
     ctx.restore();

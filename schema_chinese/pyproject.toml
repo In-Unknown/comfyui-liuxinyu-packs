@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "json-schema-chinese"
+version = "0.1.0"
+description = "Deterministic Chinese descriptions of JSON Schema Draft 2020-12"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["jsonschema>=4.18", "referencing>=0.30"]
+
+[tool.setuptools]
+packages = ["schema_chinese"]
+
+[tool.setuptools.package-dir]
+schema_chinese = "."

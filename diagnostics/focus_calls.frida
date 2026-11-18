@@ -1,0 +1,85 @@
+// Direct call observation. No focus/window-changing API is called by this script.
+let wanted = new Set(__TARGETS__.map(value => ptr(value).toString()));
+rpc.exports = { targets(values) { wanted = new Set(values.map(value => ptr(value).toString())); } };
+const u = Process.getModuleByName('user32.dll');
+const iconic = new NativeFunction(u.getExportByName('IsIconic'), 'bool', ['pointer']);
+const fg = new NativeFunction(u.getExportByName('GetForegroundWindow'), 'pointer', []);
+const root = new NativeFunction(u.getExportByName('GetAncestor'), 'pointer', ['pointer','uint']);
+const owner = new NativeFunction(u.getExportByName('GetWindowThreadProcessId'), 'uint', ['pointer','pointer']);
+const windowClass = new NativeFunction(u.getExportByName('GetClassNameW'), 'int', ['pointer','pointer','int']);
+function describeWindow(hwnd) {
+  const pid = Memory.alloc(4), name = Memory.alloc(512);
+  const tid = owner(hwnd, pid);
+  const count = windowClass(hwnd, name, 256);
+  return {hwnd:hwnd.toString(),pid:pid.readU32(),tid,className:count>0?name.readUtf16String(count):null};
+}
+const bound = new Set();
+const session = Process.id + '-' + Date.now();
+let sequence = 0;
+function frame(address) {
+  const mod = Process.findModuleByAddress(address);
+  let code = null;
+  try { code = Array.from(new Uint8Array(address.sub(16).readByteArray(32))).map(x=>x.toString(16).padStart(2,'0')).join(''); } catch (_) {}
+  return { address: address.toString(), module: mod?.name ?? null, path:mod?.path ?? null,
+    base:mod?.base.toString() ?? null, codeBefore16After16:code,
+    offset: mod ? address.sub(mod.base).toString() : null };
+}
+function hook(name, describe, module = u) {
+  const address = module.findExportByName(name);
+  if (!address || bound.has(address.toString())) return;
+  bound.add(address.toString());
+  Interceptor.attach(address, {
+    onEnter(args) {
+      const data = describe(args);
+      if (!data) return;
+      const top = root(data.hwnd, 2);
+      if (!wanted.has(data.hwnd.toString()) && !wanted.has(top.toString())) return;
+      const topWindow = top.isNull() ? data.hwnd : top;
+      if (/SetFocus|SetActiveWindow/.test(name) && fg().equals(topWindow) && !iconic(topWindow)) return;
+      this.target = data.hwnd;
+      this.topWindow = topWindow;
+      this.id = ++sequence;
+      let stack = [], stackError = null;
+      try { stack = Thread.backtrace(this.context, Backtracer.ACCURATE).map(frame); } catch (error) { stackError=String(error); }
+      send({kind:'call', session, id:this.id, api:name, pid:Process.id, tid:Process.getCurrentThreadId(),
+        time:Date.now(), hwnd:data.hwnd.toString(), args:data.args,
+        topWindow:topWindow.toString(), minimizedBefore:!!iconic(topWindow), foreground:fg().toString(),
+        targetWindow:describeWindow(data.hwnd), topWindowOwner:describeWindow(topWindow),
+        caller:frame(this.returnAddress), stack, stackError});
+    },
+    onLeave(value) {
+      if (this.id) send({kind:'return',session,id:this.id,api:name,pid:Process.id,time:Date.now(),
+        result:value.toString(),minimizedAfter:!!iconic(this.topWindow)});
+    }
+  });
+}
+for (const name of ['ShowWindow','ShowWindowAsync']) {
+  hook(name, args => ({hwnd:args[0],args:{command:args[1].toInt32()}}));
+}
+hook('FlashWindowEx', args => ({hwnd:args[0].add(Process.pointerSize).readPointer(),
+  args:{flags:args[0].add(Process.pointerSize*2).readU32(),count:args[0].add(Process.pointerSize*2+4).readU32(),
+    timeout:args[0].add(Process.pointerSize*2+8).readU32()}}));
+hook('FlashWindow', args => ({hwnd:args[0],args:{invert:args[1].toInt32()}}));
+for (const name of ['SetForegroundWindow','BringWindowToTop','SwitchToThisWindow','SetActiveWindow','SetFocus']) {
+  hook(name, args => ({hwnd:args[0],args:{}}));
+}
+for (const name of ['SendMessageW','PostMessageW','SendNotifyMessageW','DefWindowProcW']) {
+  hook(name, args => args[1].toUInt32() === 0x112 ?
+    {hwnd:args[0],args:{message:0x112,command:args[2].toUInt32()&0xfff0}} : null);
+}
+hook('SetWindowPlacement', args => ({hwnd:args[0],args:{command:args[1].add(8).readU32(),flags:args[1].add(4).readU32(),
+  normalRect:[28,32,36,40].map(offset=>args[1].add(offset).readS32())}}));
+hook('SetWindowPos', args => (args[6].toUInt32() & 0x40) || iconic(args[0]) ?
+  {hwnd:args[0],args:{flags:args[6].toUInt32(),insertAfter:args[1].toString(),
+    x:args[2].toInt32(),y:args[3].toInt32(),width:args[4].toInt32(),height:args[5].toInt32()}} : null);
+const win32u = Process.findModuleByName('win32u.dll');
+if (win32u) {
+  hook('NtUserShowWindow', args => ({hwnd:args[0],args:{command:args[1].toInt32()}}), win32u);
+  hook('NtUserFlashWindowEx', args => ({hwnd:args[0].add(Process.pointerSize).readPointer(),
+    args:{flags:args[0].add(Process.pointerSize*2).readU32(),count:args[0].add(Process.pointerSize*2+4).readU32(),
+      timeout:args[0].add(Process.pointerSize*2+8).readU32()}}), win32u);
+  hook('NtUserMessageCall', args => args[1].toUInt32() === 0x112 ?
+    {hwnd:args[0],args:{message:0x112,command:args[2].toUInt32()&0xfff0}} : null, win32u);
+}
+send({kind:'ready',session,pid:Process.id,hooks:bound.size,modules:Process.enumerateModules().map(
+  m=>({name:m.name,path:m.path,base:m.base.toString(),size:m.size}))});

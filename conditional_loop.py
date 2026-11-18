@@ -48,8 +48,8 @@ class LiuxinyuReturnPoint(io.ComfyNode):
     @classmethod
     def define_schema(cls):
         return io.Schema(
-            node_id="LiuxinyuReturnPoint", display_name="跳回点", category="liuxinyu/流程控制",
-            description="初始数据进入子流；条件回归为 true 时，将本轮数据送回跳回点，再执行一轮子流；为 false 时结束本循环，输出本轮结果并执行回归节点之后的下游节点。调回句柄直接连接配对条件回归。数据口随连接增加，最多100对，数组和图片批次不会在此拆包。",
+            node_id="LiuxinyuReturnPoint", display_name="条件循环·开始", category="liuxinyu/流程控制",
+            description="初始数据进入子流；条件循环·结束为 true 时，将本轮数据送回条件循环·开始，再执行一轮子流；为 false 时结束本循环，输出本轮结果并执行回归节点之后的下游节点。调回句柄直接连接配对条件循环·结束。数据口随连接增加，最多100对，数组和图片批次不会在此拆包。",
             enable_expand=True, loop_boundary="start", is_input_list=True,
             inputs=data_inputs(), outputs=[HANDLE.Output(display_name="调回句柄")] + data_outputs(),
             hidden=[io.Hidden.dynprompt, io.Hidden.execution_list, io.Hidden.unique_id],
@@ -67,16 +67,16 @@ class LiuxinyuReturnPoint(io.ComfyNode):
         start_id = cls.hidden.unique_id
         start = prompt.get_node(start_id)
         if not values:
-            raise ValueError("跳回点至少需要一项初始数据。")
+            raise ValueError("条件循环·开始至少需要一项初始数据。")
         if "_loop_end" not in start:
-            raise ValueError("请将调回句柄直接连接条件回归，并将本轮数据接回对应输入。")
+            raise ValueError("请将调回句柄直接连接条件循环·结束，并将本轮数据接回对应输入。")
         end_id = start["_loop_end"]
         end = prompt.get_node(end_id)
         if end["class_type"] != "LiuxinyuConditionalReturn" or end["inputs"].get("handle") != [start_id, 0]:
-            raise ValueError("调回句柄必须直接连接对应的条件回归，不支持交叉闭合。")
+            raise ValueError("调回句柄必须直接连接对应的条件循环·结束，不支持交叉闭合。")
         returns = {name: value for name, value in end["inputs"].items() if name.startswith("value")}
         if set(returns) != set(values):
-            raise ValueError("条件回归的数据输入必须与跳回点已连接的输入一一对应，不能缺少或增加。")
+            raise ValueError("条件循环·结束的数据输入必须与条件循环·开始已连接的输入一一对应，不能缺少或增加。")
         for name, value in returns.items():
             expected = link_type(prompt, start["inputs"][name])
             received = link_type(prompt, value)
@@ -86,7 +86,7 @@ class LiuxinyuReturnPoint(io.ComfyNode):
         for node in [*body.values(), end]:
             for value in node["inputs"].values():
                 if is_link(value) and value[0] == start_id and value[1] > 0 and f"value{value[1] - 1}" not in values:
-                    raise ValueError("跳回点有输出被使用，但对应初始输入未连接。")
+                    raise ValueError("条件循环·开始有输出被使用，但对应初始输入未连接。")
         plan = {"start": start_id, "end": end_id, "body": body, "returns": returns,
                 "repeat": end["inputs"]["repeat"],
                 "types": {name: runtime_type(value) for name, value in values.items()}}
@@ -104,8 +104,8 @@ class LiuxinyuConditionalReturn(io.ComfyNode):
     @classmethod
     def define_schema(cls):
         return io.Schema(
-            node_id="LiuxinyuConditionalReturn", display_name="条件回归", category="liuxinyu/流程控制",
-            description="连接调回句柄后，复制对应跳回点的数据端口和类型。true：携带本轮数据跳回配对跳回点，重新执行一轮循环，此时不执行回归之后的下游节点。false：不再跳回，结束本循环，将本轮结果从对应输出传给下游并执行下游节点，不是停止整个工作流。布尔输入每轮必须只有一个值；需等待的分支应接入本节点。",
+            node_id="LiuxinyuConditionalReturn", display_name="条件循环·结束", category="liuxinyu/流程控制",
+            description="连接调回句柄后，复制对应条件循环·开始的数据端口和类型。true：携带本轮数据跳回配对条件循环·开始，重新执行一轮循环，此时不执行回归之后的下游节点。false：不再跳回，结束本循环，将本轮结果从对应输出传给下游并执行下游节点，不是停止整个工作流。布尔输入每轮必须只有一个值；需等待的分支应接入本节点。",
             is_output_node=True, loop_boundary="end",
             inputs=[HANDLE.Input("handle", display_name="调回句柄"),
                     io.Boolean.Input("repeat", display_name="跳回循环（true）/ 进入下游（false）", default=False, force_input=True,
@@ -156,10 +156,10 @@ class LiuxinyuConditionalStep(io.ComfyNode):
         control = single_values({"plan": plan, "repeat": repeat, "position": position})
         plan, repeat, position = control["plan"], control["repeat"], control["position"]
         if type(repeat) is not bool:
-            raise ValueError("条件回归每轮必须收到一个布尔值。")
+            raise ValueError("条件循环·结束每轮必须收到一个布尔值。")
         state = single_values({"initial": initial})["initial"] if initial is not None else single_values(values)
         if set(state) != set(plan["types"]):
-            raise ValueError("回归的数据端口与跳回点不一致。")
+            raise ValueError("回归的数据端口与条件循环·开始不一致。")
         for name, items in state.items():
             expected = plan["types"][name]
             if expected and runtime_type(items) != expected:
@@ -168,7 +168,7 @@ class LiuxinyuConditionalStep(io.ComfyNode):
             cls.hidden.execution_list.release_external_block(plan["end"], state)
             return io.NodeOutput(state)
         if position >= MAX_ITERATIONS:
-            raise RuntimeError(f"条件回归已执行 {MAX_ITERATIONS} 轮但仍要求跳回循环；请检查布尔条件和回归数据。")
+            raise RuntimeError(f"条件循环·结束已执行 {MAX_ITERATIONS} 轮但仍要求跳回循环；请检查布尔条件和回归数据。")
         graph = GraphBuilder()
         source = graph.node("LiuxinyuReturnSource", "source", state=state)
         source.set_override_display_id(plan["start"])

@@ -185,7 +185,7 @@ class SplitPreviewTests(unittest.TestCase):
 
     def test_removed_boundary_formats_are_rejected_in_both_directions(self):
         for boundaries in ({"boundaries": [0.1, 0.2]}, {"percent": 10},
-                           [{"y_percent": 10}], [{"x_percent": 10}], [0.1, {"percent": 20}], []):
+                           [{"y_percent": 10}], [{"x_percent": 10}], [0.1, {"percent": 20}]):
             for direction in ("上下切分", "左右切分"):
                 for node, kwargs in ((Boundary, {"crop_margin": 10}), (Segments, {})):
                     with self.subTest(boundaries=boundaries, direction=direction, node=node.__name__):
@@ -215,6 +215,18 @@ class SplitPreviewTests(unittest.TestCase):
         self.assertEqual(Look.execute(empty, 100)[0], [])
         self.assertEqual(Boundary.execute(empty, self.boundaries, 50)[0], [])
         self.assertEqual(Segments.execute(empty, self.boundaries)[0], [])
+
+    def test_no_boundaries_keeps_each_whole_frame_for_review_and_output(self):
+        batch = torch.rand(2, 1, 9, 4)
+        for direction in ("上下切分", "左右切分"):
+            for node, kwargs in ((Boundary, {"crop_margin": 50}), (Segments, {})):
+                output, _, _, _ = run_node(node, image=[batch], boundaries=[[]],
+                                           direction=[direction], **{k:[v] for k,v in kwargs.items()})
+                self.assertEqual(len(output[0]), 2)
+                for i, frame in enumerate(output[0]):
+                    self.assertTrue(torch.equal(frame, batch[i:i+1]))
+                    frame.zero_()
+                    self.assertTrue(batch[i].any(), 'Output must not alias input')
 
     def test_nonpositive_block_height_is_rejected(self):
         for height in (0, -100):

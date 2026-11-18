@@ -78,6 +78,19 @@ function injectBatchStyles() {
 app.registerExtension({
   name: "SaveImageToPath.FolderPicker",
 
+  beforeConfigureGraph(graphData) {
+    const visit = (graph) => {
+      for (const node of graph?.nodes ?? []) {
+        if ([SAVE_IMAGE_NODE, BATCH_NODE].includes(node.type)) {
+          const input = node.inputs?.find((slot) => slot.name === "image");
+          if (input) input.type = "IMAGE,IMAGE_BYTES";
+        }
+      }
+      for (const subgraph of graph?.definitions?.subgraphs ?? []) visit(subgraph);
+    };
+    visit(graphData);
+  },
+
   async beforeRegisterNodeDef(nodeType, nodeData) {
     if (nodeData?.name !== BATCH_NODE) return;
 
@@ -110,7 +123,7 @@ app.registerExtension({
       setupPathPreview(node);
     } else if (node.comfyClass === "LoadDirectory" || node.comfyClass === "MatchPath") {
       setupDirectoryPicker(node, node.comfyClass === "MatchPath" ? "directory" : "path");
-    } else if (node.comfyClass === "LiuxinyuLoadTextFile") {
+    } else if (["LiuxinyuLoadTextFile", "LiuxinyuLoadFileBytes"].includes(node.comfyClass)) {
       setupFilePicker(node);
     } else if (node.comfyClass === BATCH_NODE) {
       setupFolderPicker(node);

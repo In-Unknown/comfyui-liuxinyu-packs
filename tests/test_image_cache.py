@@ -311,6 +311,27 @@ class ImageCacheTests(unittest.TestCase):
         cached = asyncio.run(self.executor.caches.outputs.get("out"))
         self.assertEqual(cached.outputs[0], ["other"])
 
+    def test_directory_tasks_use_natural_order_without_reordering_files(self):
+        directory = self.root / "natural"
+        directory.mkdir()
+        for name in ("10", "2", "1", "12", "11"):
+            (directory / name).mkdir()
+            (directory / (name + ".jpg")).write_bytes(b"image")
+        node = MatchPath()
+        paths = node.execute(str(directory), "正则表达式", r"^\d+$", "目录", False)[0]
+        self.assertEqual([Path(p).name for p in paths], ["1", "2", "10", "11", "12"])
+        self.assertEqual(set(paths), {str(p) for p in directory.iterdir() if p.is_dir()})
+        files = node.execute(str(directory), "字符串匹配", "", "文件", False)[0]
+        self.assertEqual(files, [str(p) for p in directory.glob("*") if p.is_file()])
+        mixed = node.execute(str(directory), "字符串匹配", "", "文件和目录", False)[0]
+        self.assertEqual(mixed, [str(p) for p in directory.glob("*")])
+        for name in ("10/10", "10/2", "2/10", "2/2"):
+            (directory / name).mkdir()
+        recursive = node.execute(str(directory), "字符串匹配", "", "目录", True)[0]
+        self.assertEqual([Path(p).relative_to(directory).as_posix() for p in recursive],
+                         ["1", "2", "2/2", "2/10", "10", "10/2", "10/10", "11", "12"])
+        self.assertEqual(node.execute(str(directory), "字符串匹配", "missing", "目录", True), ([],))
+
     def test_directory_match_refreshes_when_files_added(self):
         directory = self.root / "match"
         directory.mkdir()
