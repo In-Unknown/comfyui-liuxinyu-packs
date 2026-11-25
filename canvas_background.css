@@ -1,6 +1,7 @@
 .liuxinyu-bg-panel {
   --bg-panel-accent: var(--fg-color, #e5e5e5);
   --bg-panel-border: color-mix(in srgb, var(--fg-color, #eee) 22%, transparent);
+  --bg-slider-color: color-mix(in srgb, var(--fg-color, #eee) 22%, var(--comfy-menu-bg, #202020));
   --bg-panel-muted: color-mix(in srgb, var(--fg-color, #eee) 68%, transparent);
   position: fixed;
   inset: auto;
@@ -66,7 +67,7 @@
 .liuxinyu-bg-control > label { display: block; margin-bottom: 4px; }
 .liuxinyu-bg-slider { position: relative; height: 32px; }
 .liuxinyu-bg-ticks { position: absolute; inset: 0 16px; pointer-events: none; }
-.liuxinyu-bg-ticks span { position: absolute; top: 13px; width: 6px; height: 6px; transform: translateX(-50%); border-radius: 50%; background: var(--bg-panel-border); }
+.liuxinyu-bg-ticks span { position: absolute; top: 13px; width: 6px; height: 6px; transform: translateX(-50%); border-radius: 50%; background: var(--bg-slider-color); }
 .liuxinyu-bg-slider-editor { position: absolute; z-index: 4; bottom: calc(100% - 7px); width: max-content; padding-bottom: 12px; transform: translateX(-50%); }
 .liuxinyu-bg-slider-entry { display: flex; align-items: center; justify-content: center; gap: 3px; padding: 2px 6px; border: 1px solid var(--bg-panel-border); border-radius: 5px; background: var(--comfy-menu-bg, #202020); box-shadow: none; }
 .liuxinyu-bg-panel input[type="number"] {
@@ -80,9 +81,9 @@
   background: transparent; caret-color: currentColor; cursor: text;
 }
 .liuxinyu-bg-panel input[type="range"] { position: relative; appearance: none; width: 100%; min-width: 0; height: 32px; padding: 0 8px; margin: 0; border: 0; border-radius: 0; background: transparent; cursor: pointer; }
-.liuxinyu-bg-panel input[type="range"]::-webkit-slider-runnable-track { height: 2px; border-radius: 2px; background: var(--bg-panel-border); }
+.liuxinyu-bg-panel input[type="range"]::-webkit-slider-runnable-track { height: 2px; border-radius: 2px; background: var(--bg-slider-color); }
 .liuxinyu-bg-panel input[type="range"]::-webkit-slider-thumb { appearance: none; box-sizing: border-box; width: 16px; height: 16px; margin-top: -7px; border: 2px solid var(--fg-color, #eee); border-radius: 50%; background: var(--comfy-input-bg, #555); }
-.liuxinyu-bg-panel input[type="range"]::-moz-range-track { height: 2px; border-radius: 2px; background: var(--bg-panel-border); }
+.liuxinyu-bg-panel input[type="range"]::-moz-range-track { height: 2px; border-radius: 2px; background: var(--bg-slider-color); }
 .liuxinyu-bg-panel input[type="range"]::-moz-range-thumb { box-sizing: border-box; width: 16px; height: 16px; border: 2px solid var(--fg-color, #eee); border-radius: 50%; background: var(--comfy-input-bg, #555); }
 .liuxinyu-bg-seed { margin-top: 20px; }
 .liuxinyu-bg-seed > label { display: block; margin-bottom: 6px; }

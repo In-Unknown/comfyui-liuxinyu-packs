@@ -139,6 +139,7 @@ function updateVisibility() {
 }
 
 function yieldToErrors() {
+  for (const timer of beforeRun?.timers.values() || []) clearTimeout(timer);
   beforeRun = null;
   active = false;
   updateVisibility();
@@ -164,22 +165,33 @@ function startActivity(id) {
   const rightPanel = observePanel();
   const root = app.rootGraph || app.graph;
   if (!beforeRun || beforeRun.root !== root || beforeRun.rootId !== root?.id) {
+    for (const timer of beforeRun?.timers.values() || []) clearTimeout(timer);
     beforeRun = {
-      root, rootId: root?.id, jobs: new Set(),
+      root, rootId: root?.id, jobs: new Set(), timers: new Map(), opened: false,
       isOpen: rightPanel?.isOpen ?? app.ui?.settings?.getSettingValue?.("Comfy.RightSidePanel.IsOpen") ?? false,
       tab: rightPanel?.activeTab, activity: active,
     };
   }
+  if (beforeRun.jobs.has(id)) return;
   beforeRun.jobs.add(id);
-  openActivity();
+  const run = beforeRun;
+  run.timers.set(id, setTimeout(() => {
+    run.timers.delete(id);
+    const current = app.rootGraph || app.graph;
+    if (beforeRun !== run || !run.jobs.has(id) || run.opened || run.root !== current || run.rootId !== current?.id) return;
+    run.opened = true;
+    openActivity();
+  }, 5000));
 }
 
 function finishActivity(id, failed) {
   if (failed) { yieldToErrors(); return; }
   observePanel();
+  if (beforeRun?.timers.has(id)) { clearTimeout(beforeRun.timers.get(id)); beforeRun.timers.delete(id); }
   if (!beforeRun?.jobs.delete(id) || beforeRun.jobs.size) return;
   const previous = beforeRun;
   beforeRun = null;
+  if (!previous.opened) return;
   const root = app.rootGraph || app.graph;
   if (previous.root !== root || previous.rootId !== root?.id) return;
   const rightPanel = stores()?.get("rightSidePanel");

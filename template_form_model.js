@@ -35,12 +35,12 @@ export function rawReason(schema) {
 }
 
 export function typesOf(schema, value) {
-  if (schema === true) return ["object", "array", "string", "number", "boolean", "null"];
+  if (schema === true) return ["object", "array", "string", "integer", "number", "boolean", "null"];
   if (schema === false) return [];
   if (Array.isArray(schema.type)) return schema.type;
   if (schema.type) return [schema.type];
   // Keywords such as properties/format/minimum do not assert a JSON type.
-  const types=["object", "array", "string", "number", "boolean", "null"];
+  const types=["object", "array", "string", "integer", "number", "boolean", "null"];
   const preferred=schema.properties||schema.required||own(schema,"additionalProperties")?"object":schema.items||schema.prefixItems||own(schema,"minItems")?"array":schema.format||schema.pattern||own(schema,"minLength")?"string":own(schema,"minimum")||own(schema,"maximum")||schema.multipleOf?"number":null;
   return preferred?[preferred,...types.filter(type=>type!==preferred)]:types;
 }

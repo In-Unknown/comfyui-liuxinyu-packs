@@ -114,6 +114,11 @@ app.registerExtension({
     window.addEventListener?.('hashchange',()=>void openNotificationTarget());
     api.addEventListener('reconnected',()=>void openNotificationTarget());
     api.addEventListener("liuxinyu.template_form", ({ detail }) => receive(detail));
+    api.addEventListener('liuxinyu.template_form_source',({detail})=>{
+      if(String(detail.workflow_id)!==workflowId())return;
+      const match=findNodes(rootGraph(),String(detail.node_id)).find(item=>item.path===String(detail.node_id));
+      for(const controller of controllers)if(controller.node===match?.node)controller.source(detail);
+    });
     api.addEventListener("liuxinyu.template_form_reused", ({ detail }) => {
       notify(detail,true);
       if(String(detail.workflow_id)!==workflowId()||detail.schema===undefined)return;

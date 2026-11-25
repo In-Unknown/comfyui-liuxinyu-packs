@@ -8,8 +8,8 @@ const source = fs.readFileSync(path.join(__dirname, '../workspace_labels.js'), '
   .replace(/^import .*;\r?\n/gm, '');
 
 function harness(response = { ok: true, json: async () => ({ opened: true }) }) {
-  let extension, click;
-  const requests = [], messages = [];
+  let extension, click, contextmenu;
+  const requests = [], messages = [], roots = [];
   const context = {
     console,
     MouseEvent: class {
@@ -24,16 +24,19 @@ function harness(response = { ok: true, json: async () => ({ opened: true }) }) 
     },
     api: { async fetchApi(url, options) { requests.push({ url, ...options }); return response; } },
     document: {
-      body: {}, querySelectorAll() { return []; },
+      body: {}, querySelectorAll(selector) { return selector === '[data-v-app]' ? roots : []; },
       addEventListener(type, listener, capture) {
-        assert.equal(type, 'click'); assert.equal(capture, true); click = listener;
+        assert.equal(capture, true);
+        if (type === 'click') click = listener;
+        else if (type === 'contextmenu') contextmenu = listener;
+        else assert.fail(type);
       },
     },
     MutationObserver: class { disconnect() {} observe() {} },
   };
   vm.runInNewContext(source, context);
   extension.setup();
-  return { click, requests, messages };
+  return { click, contextmenu, requests, messages, roots };
 }
 
 function event(filename, { action = false, panel = true, folder = false, detail = 1, button = 0 } = {}) {
@@ -118,4 +121,39 @@ test('failed open displays the backend reason and releases the file for retry', 
   assert.match(h.messages[0].detail, /说明.md\nWindows 尚未设置默认程序/);
   await h.click(event('说明.md'));
   assert.equal(h.requests.length, 2);
+});
+
+
+test('native context menu retains original items and reveals files and directories without duplicates', async () => {
+  for (const leaf of [true, false]) {
+    const h = harness();
+    const node = { key: 'root/项目 空格/目录,%20' + (leaf ? '.json' : ''), leaf,
+      contextMenuItems() { assert.equal(this, node); return [{ label: '原生操作' }]; } };
+    const element = { getAttribute: () => 'tree-node-' + node.key,
+      __vueParentComponent: { props: {}, parent: { props: { node } } } };
+    const e = { target: { closest: s => s.includes('sidebar') ? {} : { querySelector: () => element } } };
+    h.roots.push({ _vnode: { component: { subTree: { el: element, props: { node } } } } });
+    h.contextmenu(e);
+    h.contextmenu(e);
+    const items = node.contextMenuItems();
+    assert.equal(items.length, 2);
+    assert.equal(items[0].label, '原生操作');
+    assert.equal(items[1].label, '跳转到对应文件夹');
+    assert.equal(items[1].visible, true);
+    await items[1].command();
+    assert.equal(h.requests[0].url, '/liuxinyu/workspace/reveal');
+    assert.equal(JSON.parse(h.requests[0].body).path, node.key.slice(5));
+  }
+});
+
+test('folder with no existing menu gets a native menu; API failure reports the selected path', async () => {
+  const h = harness({ ok: false, json: async () => ({ error: '文件已删除' }) });
+  const node = { key: 'root/目录', leaf: false };
+  const element = { getAttribute: () => 'tree-node-root/目录', __vueParentComponent: { props: { node } } };
+  h.roots.push({ _vnode: { children: [{ el: element, component: { props: { node } } }] } });
+  h.contextmenu({ target: { closest: s => s.includes('sidebar') ? {} : { querySelector: () => element } } });
+  await node.contextMenuItems()[0].command();
+  assert.equal(h.messages[0].detail, '目录\n文件已删除');
+  h.contextmenu({ target: { closest: () => null } });
+  assert.equal(h.requests.length, 1);
 });

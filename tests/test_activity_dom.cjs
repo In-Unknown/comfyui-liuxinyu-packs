@@ -107,11 +107,12 @@ const root={id:'root'}, node={id:3,title:'Stream node'};
 const events=new Map(),frames=[],windowEvents=new Map();
 let now=0;
 let extension, navigation, resolveNavigation;
+const timers=new Map();let timerId=0;function advanceActivity(){const list=[...timers].filter(([,t])=>t.ms===5000);for(const [id,t] of list){timers.delete(id);t.fn();}}
 const liveCards=[];
 class Card { constructor(node,canvas,click){this.node=node;this.click=click;this.element=new Element('article');this.dirty=true;liveCards.push(this);} render(){this.dirty=false;} destroy(){this.element.remove();} }
 const app={rootGraph:root,canvas:{deselectAll(){selection.selectedItems=[];}},registerExtension(e){extension=e;},extensionManager:{toast:{add(){}}}};
 const ctx=vm.createContext({app,api:{addEventListener:(name,fn)=>events.set(name,fn)},document,window:{addEventListener:(name,fn)=>windowEvents.set(name,fn)},
-  URL, MutationObserver:Observer,requestAnimationFrame:fn=>{frames.push(fn);return frames.length;},cancelAnimationFrame(){frames.length=0;},setInterval:()=>1,clearInterval(){},setTimeout(){},performance:{now:()=>now+=150},console,
+  URL, MutationObserver:Observer,requestAnimationFrame:fn=>{frames.push(fn);return frames.length;},cancelAnimationFrame(){frames.length=0;},setInterval:()=>1,clearInterval(){},setTimeout(fn,ms){const id=++timerId;timers.set(id,{fn,ms});return id;},clearTimeout(id){timers.delete(id);},performance:{now:()=>now+=150},console,
   ActivityNodeView:Card,findNodes:()=>[{root,node,path:'3'}],revealNode:match=>{navigation=match;return new Promise(resolve=>resolveNavigation=resolve);}});
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../activity_state.js'),'utf8').replace(/^export /gm,''),ctx);
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../activity_follow.js'),'utf8').replace(/^export /gm,''),ctx);
@@ -129,10 +130,18 @@ assert.equal(chrome.querySelector('[data-testid="activity-tab-nodes"]').classNam
 chrome.querySelector('button[aria-pressed]').fire('click');assert.equal(sidebar.closeCount,1);
 activityTab.fire('keydown',{key:'ArrowRight',preventDefault(){}});
 assert.equal(tablist.children[1].focused,true,'Arrow navigation shares the native tab group');
-events.get('execution_start')({detail:{prompt_id:'run'}});flush();
+const initialOpen=sidebar.openCount;
+events.get('execution_start')({detail:{prompt_id:'fast-run'}});flush();
+assert.equal(sidebar.openCount,initialOpen,'No panel before five seconds');
+events.get('execution_success')({detail:{prompt_id:'fast-run'}});advanceActivity();flush();
+assert.equal(sidebar.openCount,initialOpen,'Finished short run never opens panel');
+events.get('execution_start')({detail:{prompt_id:'cancel-fast'}});
+events.get('execution_interrupted')({detail:{prompt_id:'cancel-fast'}});advanceActivity();flush();
+assert.equal(sidebar.openCount,initialOpen,'Interrupted short run never opens panel');
+events.get('execution_start')({detail:{prompt_id:'run'}});advanceActivity();flush();
 assert.equal(sidebar.openCount,1);assert.equal(selection.selectedItems.length,0);
 assert(panel.classes.has('liuxinyu-activity-selected'));
-events.get('execution_start')({detail:{prompt_id:'run'}});flush();assert.equal(sidebar.openCount,1);
+events.get('execution_start')({detail:{prompt_id:'run'}});advanceActivity();flush();assert.equal(sidebar.openCount,1);
 events.get('progress_state')({detail:{prompt_id:'run',nodes:{3:{state:'running'}}}});flush();
 assert.equal(liveCards.length,1);liveCards[0].click();assert.equal(navigation.node,node);
 // Conditional switch stays between native chrome and the scroll container.
@@ -170,26 +179,26 @@ assert.equal(sidebar.activeTab,'parameters');
 resolveNavigation(true);
 windowEvents.get('pagehide')({persisted:true});
 windowEvents.get('pageshow')({persisted:true});flush();
-events.get('execution_start')({detail:{prompt_id:'next-run'}});flush();
+events.get('execution_start')({detail:{prompt_id:'next-run'}});advanceActivity();flush();
 assert.equal(sidebar.openCount,2,'Activity resumes after browser back/forward cache restoration');
 events.get('execution_success')({detail:{prompt_id:'next-run'}});flush();
 
 // Open native tabs are restored, while an already-selected Activity stays selected.
 sidebar.openPanel('settings');
-events.get('execution_start')({detail:{prompt_id:'settings-run'}});flush();
+events.get('execution_start')({detail:{prompt_id:'settings-run'}});advanceActivity();flush();
 assert(panel.classes.has('liuxinyu-activity-selected'));
 events.get('execution_success')({detail:{prompt_id:'settings-run'}});flush();
 assert.equal(sidebar.isOpen,true);assert.equal(sidebar.activeTab,'settings');
 assert(!panel.classes.has('liuxinyu-activity-selected'));
 activityTab.fire('click');flush();
-events.get('execution_start')({detail:{prompt_id:'activity-run'}});flush();
+events.get('execution_start')({detail:{prompt_id:'activity-run'}});advanceActivity();flush();
 events.get('execution_success')({detail:{prompt_id:'activity-run'}});flush();
 assert.equal(sidebar.isOpen,true);assert(panel.classes.has('liuxinyu-activity-selected'));
 
 // Overlapping starts must not snapshot the automatically opened Activity page.
 vm.runInContext('switchTab("nodes")',ctx);sidebar.closePanel();
-events.get('execution_start')({detail:{prompt_id:'overlap-a'}});flush();
-events.get('execution_start')({detail:{prompt_id:'overlap-b'}});flush();
+events.get('execution_start')({detail:{prompt_id:'overlap-a'}});advanceActivity();flush();
+events.get('execution_start')({detail:{prompt_id:'overlap-b'}});advanceActivity();flush();
 events.get('execution_success')({detail:{prompt_id:'overlap-a'}});flush();
 assert.equal(sidebar.isOpen,true);
 events.get('execution_interrupted')({detail:{prompt_id:'overlap-b'}});flush();
@@ -199,7 +208,7 @@ assert.equal(sidebar.isOpen,false);assert.equal(sidebar.activeTab,'nodes');
 for (const nativeFirst of [true,false]) {
   sidebar.activeTab='settings';sidebar.closePanel();
   const id='error-'+nativeFirst;
-  events.get('execution_start')({detail:{prompt_id:id}});flush();
+  events.get('execution_start')({detail:{prompt_id:id}});advanceActivity();flush();
   if (nativeFirst) sidebar.openPanel('errors');
   const before={opens:sidebar.openCount,closes:sidebar.closeCount};
   events.get('execution_error')({detail:{prompt_id:id}});
@@ -214,7 +223,7 @@ for (const nativeFirst of [true,false]) {
 // Reopening the already-selected native errors tab must also remove the overlay.
 activityTab.fire('click');flush();
 assert(panel.classes.has('liuxinyu-activity-selected'));
-events.get('execution_start')({detail:{prompt_id:'activity-error'}});flush();
+events.get('execution_start')({detail:{prompt_id:'activity-error'}});advanceActivity();flush();
 events.get('execution_error')({detail:{prompt_id:'activity-error'}});flush();
 events.get('execution_success')({detail:{prompt_id:'activity-error'}});flush();
 assert(!panel.classes.has('liuxinyu-activity-selected'),'Errors override even an original Activity selection');
@@ -224,21 +233,21 @@ assert(!panel.classes.has('liuxinyu-activity-selected'));
 
 // Native error navigation before a success notification cancels restoration.
 vm.runInContext('switchTab("settings")',ctx);
-events.get('execution_start')({detail:{prompt_id:'view-errors'}});flush();
+events.get('execution_start')({detail:{prompt_id:'view-errors'}});advanceActivity();flush();
 sidebar.openPanel('errors');
 events.get('execution_success')({detail:{prompt_id:'view-errors'}});flush();
 assert.equal(sidebar.activeTab,'errors');assert.equal(sidebar.isOpen,true);
 
 // A direct store selection is respected too, without requiring a native click.
 vm.runInContext('switchTab("settings")',ctx);
-events.get('execution_start')({detail:{prompt_id:'direct-errors'}});flush();
+events.get('execution_start')({detail:{prompt_id:'direct-errors'}});advanceActivity();flush();
 sidebar.activeTab='errors';flush();tick();
 events.get('execution_success')({detail:{prompt_id:'direct-errors'}});flush();
 assert.equal(sidebar.activeTab,'errors');assert(!panel.classes.has('liuxinyu-activity-selected'));
 
 // Finishing another workflow must not restore the previous workflow's sidebar.
 vm.runInContext('switchTab("settings")',ctx);sidebar.closePanel();
-events.get('execution_start')({detail:{prompt_id:'old-workflow'}});flush();
+events.get('execution_start')({detail:{prompt_id:'old-workflow'}});advanceActivity();flush();
 app.rootGraph={id:'other-root'};extension.afterConfigureGraph();flush();
 sidebar.openPanel('nodes');
 events.get('execution_success')({detail:{prompt_id:'old-workflow'}});flush();

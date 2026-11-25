@@ -38,7 +38,7 @@ function harness(){
       return {ok:true,json:async()=>({schema:body.schema,errors:[]})};
     }},
   });
-  vm.runInContext(['canvas_viewport.js','template_form_model.js','template_form_popups.js','template_form_native.js'].map(source).join('\n')+'\nconst OriginalForm=NativeTemplateForm; NativeTemplateForm=class extends OriginalForm {constructor(...args){super(...args);forms.push(this);}};this.NativeForm=NativeTemplateForm;',context);
+  vm.runInContext(['canvas_viewport.js','template_form_model.js','template_color_picker.js','template_form_popups.js','template_form_images.js','template_form_files.js','template_form_native.js'].map(source).join('\n')+'\nconst OriginalForm=NativeTemplateForm; NativeTemplateForm=class extends OriginalForm {constructor(...args){super(...args);forms.push(this);}};this.NativeForm=NativeTemplateForm;',context);
   vm.runInContext(['template_form_controller.js','template_form.js'].map(source).join('\n'),context);
   return {context,app,document,handlers,requests,toasts,revealed,notices,forms,frame(){const pending=[...frames.values()];frames.clear();pending.forEach(fn=>fn());},get extension(){return extension;},setLive(value){live=value;},setInspect(fn){inspect=fn;},setActivation(value){activation=value;}};
 }
@@ -56,6 +56,405 @@ const row=(view,path)=>view.rows.find(r=>r.path===path&&r.set&&r.kind!=='handle'
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 const object=properties=>({type:'object',properties,required:Object.keys(properties),additionalProperties:false});
 const inputOf=view=>view.popup.root.querySelector('input')||view.popup.root.querySelector('textarea');
+
+test('semantic input menu clears incompatible text and survives saved controller reload',async()=>{
+  const h=harness(),n=node(),schema=object({keys:{type:'object',additionalProperties:true}});
+  n.widgets[0].value=JSON.stringify({schema,value:{keys:{photo:'input.png'}},confirmed:false});
+  h.extension.nodeCreated(n);await flush();const v=h.forms[0];v.expanded.set('$/keys',true);v.render(v.chrome);
+  let options,choose;v.menu=(_row,_rect,list,callback)=>{options=list;choose=callback;};
+  target(v,'$/keys/photo:type').run();
+  for(const name of ['图片','文件','日期','时间','日期时间','HEX 颜色'])assert(options.some(o=>o.label===name));
+  choose('string:image');paint(v);
+  assert.equal(row(v,'$/keys/photo').kind,'image');assert.equal(v.value.keys.photo,'');
+  assert.equal(JSON.parse(n.widgets[0].value).input_types['$/keys/photo'],'image');
+  const next=node();next.widgets[0].value=n.widgets[0].value;h.extension.nodeCreated(next);await flush();
+  const restored=h.forms.at(-1);restored.expanded.set('$/keys',true);restored.render(restored.chrome);
+  assert.equal(row(restored,'$/keys/photo').kind,'image');
+  await restored.chrome.actions.find(a=>a.label==='校验').run();
+  assert.equal(h.requests.filter(r=>r.url.endsWith('/inspect')).at(-1).body.input_types['$/keys/photo'],'image');
+  n.onRemoved();next.onRemoved();
+});
+
+test('schema-constrained string editor rejects impossible pattern characters and malformed dates as they are typed',()=>{
+  const h=harness(),hex={type:'string',pattern:'^#[0-9A-Fa-f]{6}$'},date={type:'string',format:'date'};
+  assert.equal(h.context.acceptsSchemaInput(hex,'#3',''),true);
+  assert.equal(h.context.acceptsSchemaInput(hex,'#GG',''),false);
+  assert.equal(h.context.acceptsSchemaInput(hex,'#336699',''),true);
+  assert.equal(h.context.acceptsSchemaInput(date,'2026-02-30',''),false);
+  assert.equal(h.context.acceptsSchemaInput(date,'2026-02-2',''),true);
+  assert.equal(h.context.acceptsSchemaInput(date,'2026-02-2','',true),false);
+  assert.equal(h.context.acceptsSchemaInput(date,'0096-02-29','',true),true);
+  assert.equal(h.context.acceptsSchemaInput(date,'0099-02-29','',true),false);
+  const f=fixture(object({color:hex}),{color:''}),v=f.view;target(v,'$/color:value').run();const input=inputOf(v);
+  input.value='#3';input.fire('input');assert.equal(input.value,'#3');
+  input.value='#GG';input.fire('input');assert.equal(input.value,'#3');
+  input.value='#336699';input.fire('input');input.fire('keydown',{key:'Enter'});assert.equal(v.value.color,'#336699');
+  const dated=fixture(object({date}),{date:''}),dateView=dated.view;target(dateView,'$/date:value').run();const dateInput=inputOf(dateView);
+  dateInput.value='2026-02-2';dateInput.fire('input');dateInput.fire('keydown',{key:'Enter'});assert.equal(dateView.value.date,'');assert(dateView.popup);
+  dateInput.value='2026-02-28';dateInput.fire('input');dateInput.fire('keydown',{key:'Enter'});assert.equal(dateView.value.date,'2026-02-28');
+});
+
+test('dynamic object fields can be renamed without losing their values or nested view state',()=>{
+  const f=fixture({type:'object',additionalProperties:{type:'object',additionalProperties:{type:'string'}}},{旧键:{子项:'值'}}),v=f.view;
+  v.expanded.set('$/旧键',true);v.render();const member=row(v,'$/旧键');v.renameKey(member);
+  const input=inputOf(v);input.value='新键';input.fire('keydown',{key:'Enter'});
+  assert.deepEqual(plain(v.value),{'新键':{子项:'值'}});assert.equal(v.expanded.get('$/新键'),true);
+});
+
+test('new object list entries start expanded for direct field editing',()=>{
+  const f=fixture(object({items:{type:'array',items:object({name:{type:'string'}})}}),{items:[{name:'existing'}]}),v=f.view;
+  const list=row(v,'$/items'),width=f.n.size[0],before=f.n.size[1];v.resizeList(list,2);paint(v);assert.equal(v.expanded.get('$/items/1'),true);
+  assert(row(v,'$/items/1/name'));assert(f.n.size[1]>before);assert.equal(f.n.size[0],width);
+  for(const area of v.lists)assert(area.viewport.h>=area.total,`${area.path}: ${area.viewport.h} < ${area.total}`);
+  v.resizeList(row(v,'$/items'),1);paint(v);assert(f.n.size[1]<before+60);assert.equal(f.n.size[0],width);
+});
+
+test('enum editor outside save is atomic and invalid drafts keep the menu open',()=>{
+  const f=fixture({type:'object',additionalProperties:true},{key:'A'}),v=f.view;
+  v.typeChoices.set('$/key','enum');v.fieldEnums.set('$/key',['A','B']);v.render();
+  target(v,'$/key:value').run();const menu=v.popup;
+  menu.root.querySelectorAll('.menu-option-action')[0].fire('click');const input=inputOf(v);
+  input.value='B';menu.outside();assert.equal(v.popup,menu);assert.equal(v.value.key,'A');
+  menu.root.querySelectorAll('.menu-item')[1].fire('click');assert.equal(v.value.key,'A');assert.equal(v.popup,menu);
+  input.value='C';menu.outside();assert.equal(v.popup,null);assert.equal(v.value.key,'C');
+  assert.deepEqual(plain(v.fieldEnums.get('$/key')),['C','B']);v.dispose();
+});
+
+test('adding enum options replaces the bottom row and reports errors only beside that editor',()=>{
+  const f=fixture({type:'object',additionalProperties:true},{key:'A'}),v=f.view;
+  v.typeChoices.set('$/key','enum');v.fieldEnums.set('$/key',['A']);v.render();
+  target(v,'$/key:value').run();const menu=v.popup,status=v.chrome.status;
+  const add=()=>menu.root.querySelectorAll('.menu-item').at(-1).fire('click');
+  add();let input=inputOf(v);assert(input.className.includes('menu-add-editor'));assert.equal(input.parentNode,menu.root.children.at(-1));
+  for(const text of ['A',' ']){input.value=text;input.fire('keydown',{key:'Enter'});assert.equal(v.popup,menu);assert(menu.root.querySelector('.menu-option-error').textContent);assert.equal(v.errors.size,0);assert.equal(v.chrome.status,status);}
+  input.value='B';input.fire('input');assert.equal(menu.root.querySelector('.menu-option-error').textContent,'');input.fire('keydown',{key:'Enter'});
+  assert.equal(v.popup,menu);assert.deepEqual(plain(v.fieldEnums.get('$/key')),['A','B']);assert.equal(v.value.key,'A');
+  assert.deepEqual(menu.root.querySelectorAll('.menu-item').map(b=>b.textContent),['A','B','＋ 新增选项']);
+  add();input=inputOf(v);input.value='C';input.fire('keydown',{key:'Escape'});assert.equal(v.popup,menu);assert.deepEqual(plain(v.fieldEnums.get('$/key')),['A','B']);assert(!inputOf(v));
+  menu.root.querySelectorAll('.menu-option-action')[0].fire('click');input=inputOf(v);input.value='B';input.fire('keydown',{key:'Enter'});
+  assert.equal(menu.root.querySelector('.menu-option-error').textContent,'选项已存在');assert.equal(v.errors.size,0);v.dispose();
+});
+
+test('renaming and list reindexing preserve file and image settings, clearing types removes descendants',()=>{
+  const f=fixture({type:'object',additionalProperties:true},{old:{child:'A'},items:['a','b']}),v=f.view;
+  f.n.properties={lxy_template_files:{'$/old/child':{name:'a.bin'},'$/items/0':{name:'first'},'$/items/1':{name:'second'}},lxy_template_image_modes:{'$/old/child':'base64'}};
+  v.fieldEnums.set('$/old/child',['A']);v.fieldRequired.set('$/old/child',false);
+  v.errors.set('$/unrelated','other field error');
+  v.renameKey(row(v,'$/old'));const input=inputOf(v);input.value='new';input.fire('keydown',{key:'Enter'});
+  assert.deepEqual(plain(f.n.properties.lxy_template_files['$/new/child']),{name:'a.bin'});
+  assert.equal(f.n.properties.lxy_template_image_modes['$/new/child'],'base64');
+  v.reindexListState('$/items',i=>1-i);assert.equal(f.n.properties.lxy_template_files['$/items/0'].name,'second');
+  v.clearTypeChoices('$/new');assert(!v.fieldEnums.has('$/new/child'));assert(!v.fieldRequired.has('$/new/child'));
+  assert(!f.n.properties.lxy_template_files['$/new/child']);assert(!f.n.properties.lxy_template_image_modes['$/new/child']);v.dispose();
+});
+
+test('double click renames scalar and container keys while presentation editable keys are stale',()=>{
+  for(const value of ['text',{},[]]){
+    const f=fixture(object({keys:{type:'object',properties:{fixed:{type:'string'}},'x-editableKeys':[],additionalProperties:true}}),{keys:{fixed:'fixed','1':value}}),v=f.view;
+    v.expanded.set('$/keys',true);v.render();
+    const label=target(v,'$/keys/1:label');
+    v.point=()=>({x:label.rect.x+4,y:label.rect.y+10});
+    v.doubleClickListener({target:v.canvas,preventDefault(){},stopImmediatePropagation(){}});
+    assert(v.popup,'numeric key should open rename editor');
+    const input=inputOf(v);input.value='renamed';input.fire('keydown',{key:'Enter'});
+    assert.deepEqual(plain(v.value.keys.renamed),value);assert(!Object.hasOwn(v.value.keys,'1'));
+    v.renameKey(row(v,'$/keys/fixed'));assert(!v.popup,'fixed key stays protected');v.dispose();
+  }
+});
+
+test('same-size field edits and repeated renders do not resize the node',()=>{
+  const f=fixture(object({name:{type:'string'}}),{name:'A'}),v=f.view;
+  let resized=0;const setSize=f.n.setSize;f.n.setSize=function(size){resized++;setSize.call(this,size);};
+  const field=row(v,'$/name');v.commit(field.path,field.set,'B');v.render(v.chrome);v.render(v.chrome);
+  assert.equal(v.value.name,'B');assert.equal(resized,0);
+  v.setData(object({name:{type:'string',title:'long field label '.repeat(20)}}),{name:'B'});v.render(v.chrome);
+  assert(resized>0);v.dispose();
+});
+
+test('source rename migrates projected keys with each existing value intact',()=>{
+  const schema=object({keys:{type:'object',additionalProperties:true},rows:{type:'array',items:{type:'object',properties:{old:{type:'object',additionalProperties:true}},'x-requiredPropertiesFrom':{pointer:'/keys'}}}});
+  const f=fixture(schema,{keys:{old:{count:1}},rows:[{old:{count:9}},{old:{count:22}}]}),v=f.view;
+  v.expanded.set('$/keys',true);v.render();v.renameKey(row(v,'$/keys/old'));
+  const input=inputOf(v);input.value='new';input.fire('keydown',{key:'Enter'});
+  assert.deepEqual(plain(v.value),{keys:{new:{count:1}},rows:[{new:{count:9}},{new:{count:22}}]});v.dispose();
+});
+
+test('projected objects cannot add remove or rename their structural fields',()=>{
+  const f=fixture({type:'object',properties:{name:{type:'string'}},required:['name'],'x-requiredPropertiesFrom':{pointer:'/keys'},additionalProperties:true},{name:'value'}),v=f.view;
+  assert.equal(v.tree.add,null);assert.equal(row(v,'$/name').optional,false);
+  v.renameKey(row(v,'$/name'));assert.equal(v.popup,undefined);v.dispose();
+});
+
+test('editable fields show required checkbox default on, fixed and projected fields do not',()=>{
+  const f=fixture({type:'object',properties:{fixed:{type:'string'}},additionalProperties:true},{fixed:'x',dynamic:'y'}),v=f.view;
+  assert(!v.targets.some(t=>t.id==='$/fixed:required'));target(v,'$/dynamic:required').run();
+  assert.equal(v.fieldRequired.get('$/dynamic'),false);assert.equal(v.value.dynamic,'y');
+  target(v,'$/dynamic:required').run();assert.equal(v.fieldRequired.get('$/dynamic'),true);v.dispose();
+});
+
+test('dynamic enum keeps native dropdown rows and manages options through menu commands',()=>{
+  const f=fixture({type:'object',additionalProperties:true},{key:'old'}),v=f.view;
+  target(v,'$/key:type').run();v.popup.root.querySelectorAll('button').find(b=>b.textContent==='枚举').fire('click');
+  assert.equal(v.typeChoices.get('$/key'),'enum');assert.equal(v.value.key,'');
+  target(v,'$/key:value').run();
+  let items=v.popup.root.querySelectorAll('.menu-item');
+  assert.deepEqual(items.map(item=>item.textContent),['＋ 新增选项']);
+  assert.equal(v.popup.root.querySelectorAll('.menu-option-action').length,0);
+  items[0].fire('click');let input=inputOf(v);input.value='选项一';input.fire('keydown',{key:'Enter'});assert.equal(v.value.key,'选项一');
+  items=v.popup.root.querySelectorAll('.menu-item');
+  assert.deepEqual(items.map(item=>item.textContent),['选项一','＋ 新增选项']);
+  assert.equal(items[0].attrs['aria-selected'],'true');
+  assert.equal(items[0].parentNode.parentNode,v.popup.root);
+  assert(v.popup.root.querySelectorAll('.menu-option-action').every(b=>b.innerHTML.includes('<svg')&&!b.textContent));
+  v.popup.root.querySelectorAll('.menu-option-action')[0].fire('click');input=inputOf(v);input.value='修改后的选项';input.fire('keydown',{key:'Enter'});
+  assert.deepEqual(plain(v.fieldEnums.get('$/key')),['修改后的选项']);assert.equal(v.value.key,'修改后的选项');
+  assert(v.popup.root.className.includes('lxy-form-menu'));v.popup.root.querySelectorAll('.menu-option-action').find(b=>b.title==='删除').fire('click');assert.equal(v.value.key,'');assert.deepEqual(plain(v.fieldEnums.get('$/key')),[]);
+  target(v,'$/key:type').run();v.popup.root.querySelectorAll('button').find(b=>b.textContent==='字符串').fire('click');
+  assert.equal(row(v,'$/key').kind,'string');assert(!v.fieldEnums.has('$/key'));v.dispose();
+});
+
+test('enum metadata survives controller storage and inspection',async()=>{
+  const h=harness(),n=node();n.widgets[0].value=JSON.stringify({schema:{type:'object',additionalProperties:true},value:{key:'A'},input_types:{'$/key':'enum'},field_enums:{'$/key':['A','B']}});
+  h.extension.nodeCreated(n);await flush();const v=h.forms[0];assert.equal(row(v,'$/key').kind,'enum');assert.deepEqual(plain(v.fieldEnums.get('$/key')),['A','B']);
+  await v.chrome.actions.find(a=>a.label==='校验').run();assert.deepEqual(plain(h.requests.filter(r=>r.url.endsWith('/inspect')).at(-1).body.field_enums),{'$/key':['A','B']});n.onRemoved();
+});
+
+test('editable enum reuses menu styling toggle and rejects invalid edits without changing options',()=>{
+  const f=fixture({type:'object',additionalProperties:true},{key:'A'}),v=f.view;
+  v.typeChoices.set('$/key','enum');v.fieldEnums.set('$/key',['A','B']);v.render();
+  target(v,'$/key:value').run();
+  assert(v.popup.root.className.includes('lxy-form-menu'));
+  assert.equal(v.popup.triggerId,'$/key:value');assert.equal(v.popup.root.style.visibility,'hidden');
+  target(v,'$/key:value').run();assert.equal(v.popup,null);
+  const openEdit=()=>{if(!v.popup)target(v,'$/key:value').run();v.popup.root.querySelectorAll('.menu-option-action').find(b=>b.attrs['aria-label']==='修改：'+v.value.key).fire('click');return inputOf(v);};
+  let input=openEdit();input.value='B';input.fire('keydown',{key:'Enter'});
+  assert.equal(v.value.key,'A');assert.deepEqual(plain(v.fieldEnums.get('$/key')),['A','B']);assert.equal(input.attrs['aria-invalid'],'true');
+  input.value='  ';input.fire('keydown',{key:'Enter'});assert.equal(v.value.key,'A');
+  input.value='C';input.fire('keydown',{key:'Escape'});assert.equal(v.value.key,'A');
+  v.popup.root.querySelectorAll('button').find(b=>b.textContent==='B').fire('click');assert.equal(v.value.key,'B');
+  input=openEdit();input.value='C';input.fire('keydown',{key:'Enter'});assert.equal(v.value.key,'C');assert.deepEqual(plain(v.fieldEnums.get('$/key')),['A','C']);
+  assert.equal(v.valueMinimum(row(v,'$/key')),Math.max(v.menuMinimum(['A','C'])+40*(14/12),v.menuMinimum(['＋ 新增选项'])));
+  const menu=v.popup;v.popup.root.querySelectorAll('.menu-option-action').find(b=>b.attrs['aria-label']==='修改：A').fire('click');assert.equal(v.popup,menu);
+  input=inputOf(v);input.value='D';input.fire('keydown',{key:'Enter'});assert.equal(v.value.key,'C');assert.deepEqual(plain(v.fieldEnums.get('$/key')),['D','C']);
+  assert.equal(input.parentNode.className,'menu-option-row');
+  const pick=v.popup.root.querySelectorAll('.menu-item')[0],icon=v.popup.root.querySelectorAll('.menu-option-action')[0];pick.fire('pointermove');assert(pick.className.includes('is-highlighted'));icon.fire('pointerenter');assert(!pick.className.includes('is-highlighted'));
+  assert(v.popup.root.querySelectorAll('.menu-item').at(-1).className.includes('menu-add'));
+  v.popup.root.querySelectorAll('.menu-option-action').find(b=>b.attrs['aria-label']==='删除：D').fire('click');assert.equal(v.value.key,'C');assert.deepEqual(plain(v.fieldEnums.get('$/key')),['C']);v.dispose();
+});
+
+test('required overrides survive saved controller reload and reach inspection',async()=>{
+  const h=harness(),n=node(),schema={type:'object',additionalProperties:true};
+  n.widgets[0].value=JSON.stringify({schema,value:{key:'value'},confirmed:false});h.extension.nodeCreated(n);await flush();
+  const v=h.forms[0];target(v,'$/key:required').run();
+  assert.equal(JSON.parse(n.widgets[0].value).field_required['$/key'],false);
+  const next=node();next.widgets[0].value=n.widgets[0].value;h.extension.nodeCreated(next);await flush();
+  const restored=h.forms.at(-1);assert.equal(restored.fieldRequired.get('$/key'),false);
+  await restored.chrome.actions.find(a=>a.label==='校验').run();
+  assert.equal(h.requests.filter(r=>r.url.endsWith('/inspect')).at(-1).body.field_required['$/key'],false);
+  n.onRemoved();next.onRemoved();
+});
+
+test('diagnostics scroll first while fitting form content stays fully visible',()=>{
+  const f=fixture(object({items:{type:'array',items:{type:'string'}}}),{items:['a','b','c']}),v=f.view;
+  v.chrome.errors=Array.from({length:77},(_,i)=>({path:'items',message:'错误 '+i}));v.layout(600,500);
+  const content=v.lists.find(a=>a.path==='$/items'),errors=v.lists.find(a=>a.path==='@diagnostics');
+  assert.equal(content.viewport.h,content.total);assert(errors.viewport.h>=72);assert(errors.total>errors.viewport.h);assert(v.height<=501);
+  v.scroll.set('@diagnostics',200);v.layout(600,500);assert.equal(v.lists.find(a=>a.path==='@diagnostics').offset,200);
+  v.layout(600,10000);assert.equal(v.lists.find(a=>a.path==='@diagnostics').total,v.lists.find(a=>a.path==='@diagnostics').viewport.h);v.dispose();
+});
+
+test('presented dynamic keys remain renameable and reject invalid property names',()=>{
+  const f=fixture({type:'object',properties:{old:{type:'integer'}},'x-editableKeys':['old'],propertyNames:{pattern:'^[a-z]+$',minLength:3}}, {old:7}),v=f.view;
+  v.renameKey(row(v,'$/old'));let input=inputOf(v);input.value='ab';input.fire('keydown',{key:'Enter'});
+  assert.deepEqual(plain(v.value),{old:7});assert(v.popup);
+  input.value='new';input.fire('keydown',{key:'Enter'});assert.deepEqual(plain(v.value),{new:7},v.chrome.status);v.dispose();
+});
+
+test('repeated fifth-item expansion keeps layout bounded across nested lists',()=>{
+  const member=object({details:{type:'array',items:object({name:{type:'string'}})}});
+  const f=fixture(object({items:{type:'array',items:member}}),{items:Array.from({length:20},()=>({details:Array.from({length:5},()=>({name:'value'}))}))}),v=f.view;
+  for(let i=0;i<100;i++){v.expanded.set('$/items/4',i%2===0);v.render();paint(v);assert(Number.isFinite(v.height));assert(v.rows.length<1000);}
+  v.dispose();
+});
+
+test('the fifth nested list object expands and lays out its descendants',()=>{
+  const member=object({name:{type:'string'},details:{type:'array',items:object({value:{type:'string'}})}});
+  const f=fixture(object({items:{type:'array',items:member}}),{items:Array.from({length:5},(_,i)=>({name:`item-${i}`,details:[{value:`value-${i}`}]}))}),v=f.view;
+  v.expanded.set('$/items',true);v.expanded.set('$/items/4',true);v.expanded.set('$/items/4/details',true);v.expanded.set('$/items/4/details/0',true);v.render();paint(v);
+  assert(row(v,'$/items/4/name'));assert(row(v,'$/items/4/details/0/value'));
+});
+
+test('date and color semantic selections retain their type selector and dedicated picker',()=>{
+  for(const mode of ['date','time','date-time','color','file']){
+    const {view}=fixture(object({value:true}),{value:'old value'});let choose;
+    view.menu=(_row,_rect,_list,callback)=>choose=callback;
+    target(view,'$/value:type').run();choose('string:'+mode);paint(view);assert.equal(view.value.value,'');
+    assert(target(view,'$/value:type'));
+    if(mode==='file')assert.equal(row(view,'$/value').kind,'file');
+    else assert(target(view,'$/value:picker'));
+    target(view,'$/value:type').run();choose('string');paint(view);
+    assert.equal(row(view,'$/value').kind,'string');assert.equal(row(view,'$/value').schema.format,undefined);
+    view.dispose();
+  }
+});
+
+test('nested projected fields use a distinct recursive-projection marker',()=>{
+  const source={type:'object',properties:{outer:{type:'object',additionalProperties:{type:'string'}}}},value={outer:{inner:{}}};
+  const schema={type:'object',properties:{outer:{type:'object',properties:{inner:{type:'object',additionalProperties:{type:'string'},'x-requiredPropertiesFrom':{pointer:'/outer'}}},'x-requiredPropertiesFrom':{pointer:'/outer'}}}};
+  const f=fixture(schema,value),v=f.view;v.expanded.set('$/outer/inner',true);v.render();paint(v);
+  const nested=row(v,'$/outer/inner');assert.equal(nested.recursiveProjected,true);
+  assert(v.targets.some(t=>t.id==='$/outer/inner:projection'&&t.hint.includes('递归投影')));
+});
+
+test('file auto mode uses original byte size and strict 512 KiB boundary',async()=>{
+  const h=harness(),calls=[];h.context.FormData=FormData;
+  h.context.FileReader=class{readAsDataURL(){this.result='data:application/octet-stream;base64,YWJj';this.onload();}};
+  h.context.api.fetchApi=async(url,options)=>{calls.push({url,options});return {ok:true,json:async()=>({name:'report.pdf',subfolder:'template_form_files'})};};
+  assert.equal(h.context.fileStorageMode(null,524287),'base64');assert.equal(h.context.fileStorageMode(null,524288),'link');
+  assert.equal(h.context.fileStorageMode('link',0),'link');assert.equal(h.context.fileStorageMode('base64',900000),'base64');
+  const small=await h.context.storeFormFile(new File(['abc'],'report.pdf'),null);
+  assert.equal(small.value,'YWJj');assert.equal(small.display,'report.pdf');assert.equal(calls.length,0);
+  const big=await h.context.storeFormFile(new File([new Uint8Array(524288)],'report.pdf'),null);
+  assert.equal(big.value,'template_form_files/report.pdf');assert.equal(big.display,big.value);assert.equal(calls.length,1);
+});
+
+test('file field stays single line and accepts non-image clipboard files',()=>{
+  const {view,document}=fixture(object({file:{type:'string','x-file':{}},note:{type:'string'}}),{file:'',note:''});
+  assert.equal(row(view,'$/file').kind,'file');assert.equal(row(view,'$/file').height,24);
+  const field=target(view,'$/file:file');view.hover=field.id;
+  let received;view.setFile=(row,file)=>{received=file;};
+  const file={name:'report.pdf',type:'application/pdf'};
+  const event=document.fire('paste',{clipboardData:{items:[{kind:'file',type:file.type,getAsFile:()=>file}]}});
+  assert(event.prevented);assert.equal(received,file);
+  view.value.file='template_form_files/report.pdf';view.render();paint(view);
+  assert.equal(row(view,'$/file').height,24);assert.equal(target(view,'$/file:file').hint,view.value.file);
+});
+
+test('image fields reserve layout space and target only image paste without changing normal strings',()=>{
+  const {view,document}=fixture(object({photo:{type:'string','x-image':{source:'path'}},note:{type:'string'}}),{photo:'',note:''});
+  const image=target(view,'$/photo:image'),note=target(view,'$/note:value');
+  assert.equal(row(view,'$/photo').kind,'image');
+  assert.equal(row(view,'$/note').kind,'string');
+  assert(note.rect.y>=image.rect.y+image.rect.h+4);
+  let received;view.setImageFile=(field,file)=>{received={path:field.path,file};};
+  const file={type:'image/png'},clipboardData={items:[{kind:'file',type:'image/png',getAsFile:()=>file}]};
+  const first=document.fire('paste',{clipboardData});assert(!first.prevented);assert(!received);
+  view.hover=image.id;const second=document.fire('paste',{clipboardData});assert(second.prevented);assert.equal(received.path,'$/photo');
+  received=null;document.fire('paste',{target:{tagName:'INPUT'},clipboardData});assert(!received);
+  view.dispose();assert.equal(document.events.paste.length,0);
+});
+
+test('populated image header controls remain single-line above preview with matching menu anchor',()=>{
+  const f=fixture(object({photo:{type:'string','x-image':{}}}),{photo:'image.png'}),v=f.view;
+  const drawn=[],text=v.text.bind(v);v.text=(ctx,label,x,y,width,color,height,...rest)=>{drawn.push({label,y,height});return text(ctx,label,x,y,width,color,height,...rest);};
+  const preview=target(v,'$/photo:image'),clear=target(v,'$/photo:image-clear'),mode=target(v,'$/photo:image-mode');
+  for(const t of [clear,mode]){assert.equal(t.rect.h,20);assert(t.rect.y+t.rect.h<=preview.rect.y);assert.equal(v.hit({x:t.rect.x+5,y:t.rect.y+10}).id,t.id);}
+  assert(drawn.some(x=>x.label==='清空'&&x.height===20));assert(drawn.some(x=>x.label==='自动'&&x.height===20));
+  const anchor=v.anchor(mode.row,mode.rect)();assert.equal(anchor.height,20);mode.run();assert.equal(v.popup.triggerId,'$/photo:image-mode');
+  v.popup.close();clear.run();paint(v);assert.equal(v.value.photo,'');assert(!v.targets.some(t=>t.id==='$/photo:image-clear'));v.dispose();
+});
+
+test('all editable value kinds rename by label double click and preserve values and metadata',()=>{
+  const cases=[['text','hello'],['integer',2],['number',1.5],['boolean',true],['null',null],['object',{child:'value'}],['array',['value']],['enum','A'],['image','image.png'],['file','file.bin'],['date','2026-11-20'],['time','12:30:00Z'],['date-time','2026-11-20T12:30:00Z'],['color','#123456']];
+  for(const [mode,value] of cases){
+    const f=fixture(object({keys:{type:'object',additionalProperties:true}}),{keys:{'1':value}}),v=f.view,path='$/keys/1';
+    if(!['text','object','array','null'].includes(mode))v.typeChoices.set(path,mode);
+    if(mode==='enum')v.fieldEnums.set(path,['A','B']);
+    v.fieldRequired.set(path,false);v.expanded.set('$/keys',true);v.render();
+    const label=target(v,path+':label');v.point=()=>({x:label.rect.x+2,y:label.rect.y+10});
+    v.doubleClickListener({target:v.canvas,preventDefault(){},stopImmediatePropagation(){}});
+    assert(v.popup,mode+' rename opens');const input=inputOf(v);input.value='new/key~';input.fire('keydown',{key:'Enter'});
+    assert(!Object.hasOwn(v.value.keys,'1'),mode);assert.deepEqual(plain(v.value.keys['new/key~']),value,mode);
+    assert.equal(v.fieldRequired.get('$/keys/new~1key~0'),false,mode);
+    if(mode==='enum')assert.deepEqual(plain(v.fieldEnums.get('$/keys/new~1key~0')),['A','B']);v.dispose();
+  }
+});
+
+test('wheel hands remaining motion to outer lists and releases canvas zoom at both boundaries',()=>{
+  const f=fixture({type:'array',items:{type:'string'}},[]),v=f.view;
+  const rect={x:0,y:0,w:100,h:100};v.point=()=>({x:50,y:50});v.layout=()=>{};
+  const outer={path:'outer',viewport:rect,total:500,offset:20},inner={path:'inner',viewport:rect,total:200,offset:90};
+  v.lists=[outer,inner];
+  const wheel=(deltaY,deltaMode=0)=>{let prevented=false;v.wheel({target:v.canvas,deltaY,deltaMode,preventDefault(){prevented=true;},stopImmediatePropagation(){}});return prevented;};
+  assert(wheel(30));assert.equal(v.scroll.get('inner'),100);assert.equal(v.scroll.get('outer'),40);
+  inner.offset=100;outer.offset=40;assert(wheel(20));assert.equal(v.scroll.get('outer'),60);
+  inner.offset=0;outer.offset=60;assert(wheel(-20));assert.equal(v.scroll.get('outer'),40);
+  inner.offset=5;outer.offset=40;assert(wheel(-10));assert.equal(v.scroll.get('inner'),0);assert.equal(v.scroll.get('outer'),35);
+  inner.offset=outer.offset=0;assert.equal(wheel(-10),false);
+  inner.offset=100;outer.offset=400;assert.equal(wheel(10),false);
+  inner.offset=0;outer.offset=0;assert(wheel(1,1));assert.equal(v.scroll.get('inner'),16);
+  assert(wheel(1,2));assert.equal(v.scroll.get('inner'),100);
+  inner.clip={x:200,y:200,w:100,h:100};assert(wheel(20));assert.equal(v.scroll.get('outer'),20);v.dispose();
+});
+
+test('image conversion honors explicit source and refuses unsafe paths',()=>{
+  const h=harness();h.context.api.apiURL=value=>value;h.context.URLSearchParams=URLSearchParams;h.context.window.location={href:'http://localhost:8188/'};
+  const preview=(source,value,extra={})=>h.context.imagePreviewURL({'x-image':{source},...extra},value);
+  assert.match(preview('path','template_form/a.png'),/filename=a.png.*subfolder=template_form/);
+  assert.match(h.context.imageThumbnailURL({'x-image':{source:'path'}},'template_form/a.png'),/image\/thumbnail\?path=template_form%2Fa.png/);
+  assert.equal(preview('url','https://example.com/a.png'),'https://example.com/a.png');
+  assert.equal(preview('base64','YWJj',{contentMediaType:'image/jpeg'}),'data:image/jpeg;base64,YWJj');
+  assert.equal(preview('data-url','data:image/png;base64,YWJj'),'data:image/png;base64,YWJj');
+  assert.match(preview('path','C:\\images\\photo.png'),/template_form\/image\?path=C%3A%5Cimages%5Cphoto.png/);
+  assert.throws(()=>preview('path','../secret.png'));
+  assert.throws(()=>preview('url','javascript:alert(1)'));
+  assert.throws(()=>preview('data-url','data:text/html;base64,YWJj'));
+});
+
+test('image input defaults depend on origin; explicit menu overrides both origins',()=>{
+  const h=harness(),mode=h.context.imageInputMode;
+  assert.equal(mode(null,'file'),'path');
+  assert.equal(mode(null,'paste',false),'data-url');
+  assert.equal(mode(null,'paste',true),'data-url');
+  assert.equal(mode('link','paste',false),'path');
+  assert.equal(mode('copy','file'),'copy');
+  assert.equal(mode('base64','file'),'data-url');
+  assert.equal(h.context.clipboardImageReference({getData:type=>type==='text/plain'?'https://example.com/a.png':''}),'https://example.com/a.png');
+  assert.equal(h.context.clipboardImageReference({getData:()=>''}),'');
+});
+
+test('stale widget paint dimensions cannot push fields or footer outside the node after resume',()=>{
+  const {view,n,document}=fixture(object({photo:{type:'string','x-image':{}},note:{type:'string'}}),{photo:'',note:''});
+  view.render({actions:[{label:'校验',run(){}},{label:'复位到模板',run(){}}]});
+  n.size=[480,300];view.widget.computedHeight=700;
+  view.widget.draw(context2d(),n,900,24);
+  assert.equal(view.width,480);
+  for(const t of view.targets)assert(t.rect.x+t.rect.w<=480,t.id);
+  const footer=view.rows.find(r=>r.kind==='footer');assert(footer.rect.y+footer.rect.h<=276);
+  view.hover='$/photo:image';view.pressed='$/photo:image';
+  document.fire('visibilitychange');assert.equal(view.hover,null);assert.equal(view.pressed,null);
+  assert.deepEqual(plain(view.value),{photo:'',note:''});
+  view.dispose();assert.equal(document.events.visibilitychange.length,0);
+});
+
+test('empty image is a normal row; populated image expands and clearing restores height',()=>{
+  const {view}=fixture(object({photo:{type:'string','x-image':{}},note:{type:'string'}}),{photo:'',note:''});
+  assert.equal(row(view,'$/photo').height,24);
+  const menu=target(view,'$/photo:image-mode');menu.run();
+  const options=view.popup.root.querySelectorAll('button');assert(options.some(button=>button.textContent==='Base64'));
+  view.popup.close();view.value.photo='data:image/png;base64,YWJj';view.render();
+  assert.equal(row(view,'$/photo').height,156);
+  target(view,'$/photo:image-clear').run();
+  assert.equal(view.value.photo,'');assert.equal(row(view,'$/photo').height,24);
+});
+
+test('image copy uploads while original path mode never uploads and Base64 stays embedded',async()=>{
+  const h=harness(),calls=[];
+  h.context.FormData=FormData;h.context.URLSearchParams=URLSearchParams;
+  h.context.window.location={href:'http://localhost:8188/'};h.context.api.apiURL=value=>value;
+  h.context.createImageBitmap=async()=>({close(){}});
+  h.context.api.fetchApi=async(url,options)=>{calls.push({url,options});return {ok:true,json:async()=>({name:'photo (1).png',subfolder:'template_form'})};};
+  const file=new Blob(['image'],{type:'image/png'});
+  const convert=source=>h.context.imageFileValue({'x-image':{source},contentMediaType:'image/png'},file);
+  assert.equal(await convert('copy'),'template_form/photo (1).png');
+  assert.equal(calls[0].url,'/upload/image');assert.equal(calls[0].options.body.get('type'),'input');
+  const url=new URL(await convert('url'));assert.equal(url.searchParams.get('filename'),'photo (1).png');
+  h.context.FileReader=class{readAsDataURL(){this.result='data:image/png;base64,YWJj';this.onload();}};
+  assert.equal(await convert('base64'),'YWJj');assert.equal(await convert('data-url'),'data:image/png;base64,YWJj');assert.equal(calls.length,2);
+  await assert.rejects(()=>h.context.imageFileValue({'x-image':{source:'base64'},contentMediaType:'image/jpeg'},file),/contentMediaType/);
+  await assert.rejects(()=>convert('path'),/系统文件选择器/);
+  h.context.api.fetchApi=async()=>({ok:false,status:413});await assert.rejects(()=>convert('copy'),/413/);
+});
 
 test('single canvas member: labels and values align, slider stays on the number row; fold releases height',()=>{
   const schema=object({name:{type:'string'},count:{type:'integer',minimum:1,maximum:10},flag:{type:'boolean'},group:object({note:{type:'string'}})});
@@ -180,12 +579,46 @@ test('value hover does not inherit a previous native tooltip',()=>{
   f.app.canvas.canvas.title='stale';f.view.pointerMove({clientX:t.rect.x+3,clientY:t.rect.y+3,target:f.app.canvas.canvas});assert.equal(f.app.canvas.canvas.title,'');
 });
 
-test('narrow four-component vectors wrap inside the value column and reserve actual height',()=>{
+test('four-component vector minimum width propagates to the node and preserves all axes in one row',()=>{
   const f=fixture(object({v:object({x:{type:'number'},y:{type:'number'},z:{type:'number'},w:{type:'number'}}),after:{type:'string'}}),{v:{x:1,y:2,z:3,w:4},after:'next'});
   f.n.size[0]=360;f.view.render();
   const x=target(f.view,'$/v:axisx').rect,y=target(f.view,'$/v:axisy').rect,z=target(f.view,'$/v:axisz').rect,w=target(f.view,'$/v:axisw').rect,after=target(f.view,'$/after:value').rect;
-  assert.equal(x.x,z.x);assert.equal(y.x,w.x);assert.equal(z.y,x.y+28);assert(after.y>=w.y+w.h+2);assert.equal(w.x+w.w,after.x+after.w);
+  assert(f.n.size[0]>=f.view.minWidth);assert.equal(x.y,z.y);assert.equal(y.y,w.y);assert(after.y>=w.y+w.h+2);assert.equal(w.x+w.w,after.x+after.w);
   f.n.size[0]=720;f.view.render();assert.equal(target(f.view,'$/v:axisx').rect.y,target(f.view,'$/v:axisw').rect.y);
+});
+
+test('value and type share surplus equally and nested container minima reach node layout',()=>{
+  const f=fixture(object({field:true}),{field:'text'}),v=f.view;
+  const value=()=>target(v,'$/field:value').rect,type=()=>target(v,'$/field:type').rect;
+  const before=[value().w,type().w];f.n.size[0]+=300;v.render();
+  assert(Math.abs((value().w-before[0])-(type().w-before[1]))<.001);
+  assert(type().w>=v.typeMinimum(row(v,'$/field')));
+  const nested=fixture(object({rows:{type:'array',items:{type:'array',items:object({field:true})}}}),{rows:[[{field:'text'}]]});
+  nested.view.expanded.set('$/rows',true);nested.view.expanded.set('$/rows/0',true);nested.view.expanded.set('$/rows/0/0',true);
+  nested.n.size=[100,1200];nested.view.render();
+  const t=target(nested.view,'$/rows/0/0/field:type'),input=target(nested.view,'$/rows/0/0/field:value');
+  assert(nested.view.minWidth>f.view.minWidth);
+  assert(nested.n.size[0]>=nested.view.widget.computeLayoutSize(nested.n).minWidth);
+  assert(t.rect.w>=nested.view.typeMinimum(row(nested.view,'$/rows/0/0/field')));
+  assert(input.rect.w>=nested.view.valueMinimum(row(nested.view,'$/rows/0/0/field')));
+  assert(input.rect.x+input.rect.w<=t.rect.x);
+  assert(t.rect.x+t.rect.w<=t.clip.x+t.clip.w);
+  const minimum=nested.view.minWidth;nested.view.expanded.set('$/rows',false);nested.view.render();assert.equal(nested.view.minWidth,minimum);
+  v.dispose();nested.view.dispose();
+});
+
+test('dropdown trigger minimum fits the widest option and popup copies its actual width',()=>{
+  const longest='这是一条需要完整显示且比当前值更长的选项';
+  const f=fixture(object({choice:{type:'string',enum:['短',longest]}}),{choice:'短'}),v=f.view;
+  const item=row(v,'$/choice'),minimum=v.valueMinimum(item);
+  assert.equal(minimum,Math.ceil(v.textWidth(longest,'14px LxyInspectorInter, sans-serif')+27*14/12));
+  assert(v.typeMinimum({types:['null']})<90); // No unrelated fixed 90px floor.
+  f.n.size[0]=100;v.render();const trigger=target(v,'$/choice:value');
+  assert(trigger.rect.w>=minimum);
+  trigger.run();f.frame();
+  const popupWidth=parseFloat(v.popup.root.style.width),scale=Number(v.popup.root.style.transform.match(/scale\(([^)]+)\)/)[1]);
+  assert(Math.abs(popupWidth*scale-trigger.rect.w)<.001);
+  v.dispose();
 });
 
 test('live editor anchors follow resizing and errors reserve a separate row without losing the draft',()=>{
@@ -385,9 +818,74 @@ test('popup placement maps canvas device pixels, scale and translation; date val
 });
 
 test('multiline expansion preserves text and submit busy state survives editor cleanup',()=>{
-  const {view}=fixture({type:'string'},'first');target(view,'$:value').run();let input=inputOf(view);
-  input.fire('keydown',{key:'Enter',shiftKey:true});input=inputOf(view);assert.equal(input.tagName,'textarea');input.value='first\nsecond';input.fire('keydown',{key:'Enter',ctrlKey:true});assert.equal(view.value,'first\nsecond');
+  const f=fixture({type:'string'},'first'),view=f.view;target(view,'$:value').run();let input=inputOf(view);
+  input.fire('keydown',{key:'Enter',shiftKey:true});input=inputOf(view);paint(view);f.frame();assert.equal(input.tagName,'textarea');assert.match(input.style.height,/calc\(100% - /);assert.equal(row(view,'$').rect.h,48);
+  input.value='first\nsecond';input.fire('keydown',{key:'Enter',ctrlKey:true});assert.equal(view.value,'first\nsecond');
   target(view,'$:value').run();view.setBusy(true);assert.equal(view.busy,true);assert.equal(view.popup,null);
+});
+
+test('pasted multiline text expands inline and survives commit and repeated reopening',()=>{
+  const f=fixture({type:'string'},'start'),v=f.view;
+  target(v,'$:value').run();let input=inputOf(v);
+  assert.equal(input.tagName,'textarea');
+  input.value='第一行\n第二行\n\n最后一行';input.fire('input');f.frame();
+  assert.equal(row(v,'$').rect.h,88);assert.equal(v.popup.inline,true);
+  input.fire('keydown',{key:'Enter',ctrlKey:true});
+  for(let i=0;i<3;i++){
+    target(v,'$:value').run();input=inputOf(v);f.frame();
+    assert.equal(input.tagName,'textarea');assert.equal(input.value,'第一行\n第二行\n\n最后一行');
+    assert.equal(v.popup.inline,true);assert.match(input.style.height,/calc/);
+    assert.equal(input.style.padding,'0 14px 0 0');assert.equal(input.style.whiteSpace,'pre-wrap');
+    v.popup.outside();
+  }
+  assert.equal(v.value,'第一行\n第二行\n\n最后一行');v.dispose();
+});
+
+test('inline strings hide horizontal scrollbars before placement and after multiline transitions',()=>{
+  const f=fixture({type:'string'},'long text '.repeat(80)),v=f.view;
+  target(v,'$:value').run();const input=inputOf(v);
+  assert.equal(input.style.overflowX,'hidden');assert.equal(input.style.overflowY,'hidden');
+  f.frame();assert.equal(input.style.overflowY,'auto');
+  input.value+='\nsecond';input.fire('input');paint(v);f.frame();
+  assert.equal(input.style.overflowX,'hidden');assert.equal(input.style.overflowY,'auto');
+  input.value='short';input.fire('input');paint(v);f.frame();
+  assert.equal(input.style.overflowX,'hidden');assert.equal(input.style.overflowY,'hidden');
+  v.dispose();
+});
+
+test('soft wraps grow string fields while only real newlines have display markers',()=>{
+  const f=fixture({type:'string'},'abcdefghij'.repeat(18)+'\n\nend'),v=f.view;
+  const narrow=row(v,'$').rect.h;assert(narrow>68);
+  const lines=f.context.formStringLines('abcdef\r\n\nend',3,t=>t.length);
+  assert.deepEqual(plain(lines),[{text:'abc',hardEnd:false},{text:'def',hardEnd:true},{text:'',hardEnd:true},{text:'end',hardEnd:false}]);
+  f.n.size[0]+=1000;v.render();paint(v);assert(row(v,'$').rect.h<narrow);
+  const original=v.value;target(v,'$:value').run();f.frame();const input=inputOf(v);
+  assert.equal(input.wrap,'soft');assert.equal(input.style.whiteSpace,'pre-wrap');
+  assert.equal(v.popup.root.querySelectorAll('span').filter(s=>s.textContent==='↵').length,2);
+  v.popup.outside();assert.equal(v.value,original);v.dispose();
+});
+
+test('text height follows draft line count upward and downward and restores on cancel',()=>{
+  const f=fixture({type:'string'},'one\ntwo'),v=f.view;
+  assert.equal(row(v,'$').rect.h,48);target(v,'$:value').run();const input=inputOf(v);
+  input.value=Array(15).fill('line').join('\n');input.fire('input');f.frame();paint(v);
+  assert.equal(row(v,'$').rect.h,308);
+  input.value='one\ntwo\nthree';input.fire('input');f.frame();paint(v);
+  assert.equal(row(v,'$').rect.h,68);
+  input.value='one';input.fire('input');f.frame();paint(v);assert.equal(row(v,'$').rect.h,24);
+  v.popup.close();assert.equal(row(v,'$').rect.h,48);assert.equal(v.value,'one\ntwo');
+  target(v,'$:value').run();const next=inputOf(v);next.value=Array(12).fill('row').join('\n');next.fire('input');v.popup.outside();
+  assert.equal(row(v,'$').rect.h,248);target(v,'$:value').run();f.frame();assert.equal(row(v,'$').rect.h,248);v.dispose();
+});
+
+test('Shift Enter inserts a newline at the selection on first press and preserves format restrictions',()=>{
+  const f=fixture({type:'string'},'abcd'),v=f.view;target(v,'$:value').run();
+  const input=inputOf(v);input.selectionStart=1;input.selectionEnd=3;
+  input.fire('keydown',{key:'Enter',shiftKey:true});assert.equal(input.value,'a\nd');
+  input.fire('keydown',{key:'Enter',ctrlKey:true});assert.equal(v.value,'a\nd');v.dispose();
+  const g=fixture({type:'string',pattern:'^[a-z]+$'},'abc');target(g.view,'$:value').run();
+  const limited=inputOf(g.view);limited.fire('keydown',{key:'Enter',shiftKey:true});
+  assert.equal(limited.value,'abc');g.view.dispose();
 });
 
 test('unambiguous oneOf data renders fields without reinitializing or exposing JSON',()=>{
@@ -404,7 +902,48 @@ test('color recognition is explicit; color channels/HSV round-trip and popup can
   const hsv=context.rgbHSV([77,153,204]);assert.deepEqual(plain(context.hsvRGB(...hsv)),[77,153,204]);assert.equal(context.colorHex([77,153,204,204],6),'#4D99CC');
   target(view,'$:picker').run();let hex=view.popup.root.querySelectorAll('input').find(i=>i.ariaLabel==='HEX');hex.value='#FF000080';hex.fire('input');assert.equal(view.value,'#4D99CCCC');
   view.popup.root.querySelectorAll('button').find(b=>b.textContent==='取消').fire('click');assert.equal(view.value,'#4D99CCCC');
-  target(view,'$:picker').run();hex=view.popup.root.querySelectorAll('input').find(i=>i.ariaLabel==='HEX');hex.value='#FF000080';hex.fire('input');view.popup.root.querySelectorAll('button').find(b=>b.textContent==='应用').fire('click');assert.equal(view.value,'#FF000080');
+  target(view,'$:picker').run();hex=view.popup.root.querySelectorAll('input').find(i=>i.ariaLabel==='HEX');hex.value='#FF000080';hex.fire('input');view.popup.root.querySelectorAll('button').find(b=>b.textContent==='确定').fire('click');assert.equal(view.value,'#FF000080');
+});
+
+test('Photoshop picker color spaces round trip and Web colors quantize before confirmation',()=>{
+  const {context,view}=fixture({type:'string',pattern:'^#[0-9A-Fa-f]{6}$'},'#123456');
+  for(const rgb of [[255,255,255],[0,0,0],[255,0,0],[12,140,232]]){
+    const lab=context.pickerLab(rgb),back=context.pickerFromLab(lab);back.forEach((v,i)=>assert(Math.abs(v-rgb[i])<=1));
+    assert.deepEqual(plain(context.pickerFromCMYK(context.pickerCMYK(rgb))),rgb);
+  }
+  target(view,'$:picker').run();const root=view.popup.root;
+  for(const text of ['确定','取消','添加到色板','颜色库'])assert(root.querySelectorAll('button').some(b=>b.textContent===text));
+  assert.deepEqual(root.querySelectorAll('canvas').map(c=>[c.width,c.height]),[[256,256],[19,256]]);
+  const web=root.querySelectorAll('input').find(i=>i.ariaLabel==='只有 Web 颜色');web.checked=true;web.fire('change');
+  root.querySelectorAll('button').find(b=>b.textContent==='确定').fire('click');assert.equal(view.value,'#003366');view.dispose();
+});
+
+test('Photoshop picker edits blue independently of brightness and retains original on cancel',()=>{
+  const {view}=fixture({type:'string',pattern:'^#[0-9A-Fa-f]{6}$'},'#112233');target(view,'$:picker').run();
+  const root=view.popup.root,blue=root.querySelectorAll('input').find(i=>i.ariaLabel==='蓝');blue.value='255';blue.fire('input');
+  assert.equal(root.querySelectorAll('input').find(i=>i.ariaLabel==='HEX').value,'1122ff');
+  const radio=root.querySelectorAll('input').find(i=>i.ariaLabel==='选择Blue通道');radio.fire('change');
+  root.querySelectorAll('button').find(b=>b.textContent==='取消').fire('click');assert.equal(view.value,'#112233');view.dispose();
+});
+
+test('named swatches persist and library returns without committing the form',async()=>{
+  const f=fixture({type:'string',pattern:'^#[0-9A-Fa-f]{6}$'},'#123456'),v=f.view;const stored=new Map();
+  f.context.localStorage={getItem:k=>stored.get(k),setItem:(k,val)=>stored.set(k,val)};
+  target(v,'$:picker').run();v.popup.root.querySelectorAll('button').find(b=>b.textContent==='添加到色板').fire('click');
+  const name=v.popup.root.querySelectorAll('input').find(i=>i.ariaLabel==='色板名称');name.value='测试蓝';
+  v.popup.root.querySelectorAll('button').find(b=>b.textContent==='确定').fire('click');
+  assert.deepEqual(JSON.parse(stored.get('liuxinyu.colorSwatches')),[{name:'测试蓝',hex:'#123456'}]);
+  v.popup.root.querySelectorAll('button').find(b=>b.textContent==='颜色库').fire('click');await flush();
+  assert(v.popup.root.querySelectorAll('button').some(b=>b.title==='测试蓝'));
+  v.popup.root.querySelectorAll('button').find(b=>b.textContent==='拾色器(P)').fire('click');assert.equal(v.value,'#123456');
+  assert(v.popup.root.querySelectorAll('canvas').some(c=>c.width===256));v.dispose();
+});
+
+test('hue strip is a full spectrum even when current color is black',()=>{
+  const f=fixture({type:'string',pattern:'^#[0-9A-Fa-f]{6}$'},'#000000');const create=f.document.createElement;
+  const images=[];f.document.createElement=tag=>{const el=create(tag);if(tag==='canvas')el.getContext=()=>({...context2d(),createImageData:(w,h)=>({width:w,height:h,data:new Uint8ClampedArray(w*h*4)}),putImageData:data=>images.push(data)});return el;};
+  target(f.view,'$:picker').run();const strip=images.find(i=>i.width===19);assert(strip);
+  assert(strip.data.some((v,i)=>i%4!==3&&v===255));assert(strip.data.some((v,i)=>i%4===1&&v===255));f.view.dispose();
 });
 
 test('backend field errors stay by their property and safe object additions do not alter prototypes',()=>{
@@ -513,6 +1052,10 @@ test('drag paints the complete item in its vertical track and shifts peers witho
   const moves=[],texts=[],ctx=context2d();ctx.translate=(x,y)=>moves.push({x,y});ctx.fillText=text=>texts.push(text);v.draw(ctx);
   assert(moves.every(p=>p.x===0));assert(texts.includes('C'));assert.equal(v.targets.length,0);
   assert(v.rows.filter(r=>r.path==='$/2/inner'&&r.kind==='listBackground').every(r=>r.entryOwners.some(o=>o.path==='$'&&o.index===2)));
+  const layout=v.layout.bind(v);let layouts=0;v.layout=(...args)=>{layouts++;return layout(...args);};
+  v.widget.computedHeight=v.availableHeight;
+  v.widget.draw(context2d(),v.node,v.node.size[0],v.widget.y??0);
+  assert.equal(layouts,0);
   cursor.onDragEnd();cursor.finally();assert.deepEqual(plain(v.value.map(x=>x.name)),['C','A','B']);assert.equal(f.changes.length,1);
 });
 
@@ -531,8 +1074,8 @@ test('refresh action is leftmost, preserves compatible drafts and updates reset 
   let queued=0,finish;h.context.queueTemplateRefresh=async()=>{queued++;return {prompt_id:'refresh',target:'4'};};
   h.context.waitTemplateRefresh=()=>new Promise(resolve=>{finish=resolve;});
   h.extension.nodeCreated(n);await flush();const v=h.forms[0];
-  assert.equal(v.chrome.actions[0].label,'计算链以更新模版缓存');
-  const run=v.chrome.actions[0].run,work=run();await flush();await run();assert.equal(queued,1);
+  assert.equal(v.chrome.actions[0].label,'保存当前配置值(只用于当前模版)');
+  const run=v.chrome.actions.find(a=>a.label==='计算链以更新模版缓存').run,work=run();await flush();await run();assert.equal(queued,1);
   assert.equal(JSON.parse(n.widgets[0].value).refresh_job.prompt_id,'refresh');
   const updated=object({name:{type:'string',default:'new'},extra:{type:'integer',default:5}});
   finish(updated);await work;
@@ -554,6 +1097,19 @@ test('empty form can refresh; failure retains old data; saved refresh resumes wi
   n.onRemoved();const next=node();next.widgets[0].value=JSON.stringify({...before,refresh_job:{prompt_id:'saved',target:'4'}});
   h.context.waitTemplateRefresh=async job=>{assert.equal(job.prompt_id,'saved');return {type:'string',default:'latest'};};
   h.extension.nodeCreated(next);await flush();assert.equal(queued,2);assert.equal(h.forms.at(-1).schema.default,'latest');next.onRemoved();
+});
+
+test('imported values override old drafts and save action exports current template metadata at the left',async()=>{
+  const h=harness(),n=node(),schema=object({name:{type:'string'}});n.id=4;h.app.rootGraph.nodes=[n];h.context.findNodes=()=>[{node:n,path:'4'}];
+  n.widgets[0].value=JSON.stringify({schema,value:{name:'old'},confirmed:true});
+  h.extension.setup();h.extension.nodeCreated(n);await flush();
+  h.handlers.get('liuxinyu.template_form')({detail:{request_id:'import',workflow_id:'root',node_id:'4',schema,value:{name:'new'},has_value:true,imported:true,input_types:{'$/name':'string'},field_required:{'$/name':true}}});
+  await flush();const v=h.forms[0];assert.equal(v.value.name,'new');
+  const save=v.chrome.actions.find(a=>a.align==='left');assert(save);
+  paint(v);const footer=v.rows.find(r=>r.kind==='footer');assert.equal(footer.items.find(i=>i.action===save).x,0);
+  await save.run();const request=h.requests.find(r=>r.url.endsWith('/save-values'));
+  assert.equal(request.body.value.name,'new');assert.deepEqual(request.body.field_required,{'$/name':true});
+  assert(!h.requests.some(r=>r.url.endsWith('/submit')));n.onRemoved();
 });
 
 test('refresh refuses to enqueue behind the same form waiting for confirmation',async()=>{
@@ -634,6 +1190,19 @@ test('validation shows Chinese field guidance and a count summary, with a struct
   assert.equal(v.chrome.status,'发现 1 个问题，请按下方提示修改。');assert.deepEqual(plain(v.chrome.errors[0]),{path:'名称',targetPath:'$/名称',message:'不能为空，请填写内容。'});
   assert.equal(v.serverErrors.get('$/名称'),'不能为空，请填写内容。');paint(v);
   assert(v.targets.some(t=>t.kind==='click'&&t.hint==='点击定位到此字段'));assert(!JSON.stringify(v.chrome.errors[0]).includes('minLength'));n.onRemoved();
+});
+
+test('validation auto-fits form content and gives diagnostics one-and-a-half minimum heights',async()=>{
+  const h=harness(),n=node(),schema=object({items:{type:'array',items:{type:'string'}}});
+  n.widgets[0].value=JSON.stringify({schema,value:{items:Array.from({length:12},(_,i)=>`item ${i}`)},confirmed:false});
+  let invalid=true;h.setInspect(()=>({errors:invalid?Array.from({length:9},(_,i)=>({path:'/items/'+i,message:'错误 '+i})):[]}));
+  h.extension.nodeCreated(n);await flush();const v=h.forms[0],width=n.size[0];n.size[1]=220;n.arrange();
+  await target(v,'footer:校验').run();paint(v);
+  const content=v.lists.find(a=>a.path==='$/items'),diagnostics=v.lists.find(a=>a.path==='@diagnostics');
+  assert.equal(content.viewport.h,content.total);assert.equal(diagnostics.viewport.h,108);assert(diagnostics.total>108);
+  assert.equal(n.size[0],width);const errorHeight=n.size[1];
+  invalid=false;await target(v,'footer:校验').run();paint(v);
+  assert(!v.lists.some(a=>a.path==='@diagnostics'));assert(n.size[1]<errorHeight,`${n.size[1]} < ${errorHeight}`);assert.equal(n.size[0],width);n.onRemoved();
 });
 
 test('failed Check and Confirm keep diagnostics and revalidate committed edits until valid, without submitting',async()=>{
@@ -844,9 +1413,10 @@ test('diagnostic paths and wrapped log rows preserve full text within resized no
     n.size[0]=width;view.render({errors:[{path,message},{path:'其他.字段',message:'请填写内容。'}],actions:[{label:'校验',run(){}}]});
     const rows=view.rows.filter(r=>r.kind==='diagnostic');assert.equal(rows.length,2);
     const first=rows[0];assert.equal(first.pathLines.join(''),path);assert.equal(first.messageLines.join(''),message);
-    if(width===360){narrowHeight=first.rect.h;assert(first.pathLines.length>1);}else assert(first.rect.h<narrowHeight);
+    if(width===360){narrowHeight=first.rect.h;assert(first.messageLines.length>1);}else assert(first.rect.h<narrowHeight);
     assert(rows[1].rect.y>=first.rect.y+first.rect.h);
-    assert(view.rows.find(r=>r.kind==='footer').rect.y>=rows[1].rect.y+rows[1].rect.h+10);
+    const diagnostics=view.lists.find(a=>a.path==='@diagnostics');
+    assert(view.rows.find(r=>r.kind==='footer').rect.y>=diagnostics.viewport.y+diagnostics.viewport.h+10);
     const ctx=context2d(),drawn=[];ctx.fillText=(text,x,y)=>drawn.push({text,x,y});view.draw(ctx);
     for(const line of drawn.filter(t=>t.x===first.rect.x+56&&t.y<first.rect.y+first.rect.h)){
       assert(!line.text.includes('…'));assert(line.x+ctx.measureText(line.text).width<=first.rect.x+first.rect.w-12);
@@ -891,8 +1461,22 @@ test('nullable types use a full labelled dropdown, preserve selection, and initi
 test('type dropdowns name all types and share enum menu sizing on nested collections',()=>{
   const f=fixture(true,[]),v=f.view;
   target(v,'$:type').run();let options=v.popup.root.querySelectorAll('button');
-  assert(options.some(b=>b.textContent==='浮点数'));assert(options.some(b=>b.textContent==='布尔值'));assert(options.some(b=>b.textContent==='无值'));
+  assert(options.some(b=>b.textContent==='整数'));assert(options.some(b=>b.textContent==='浮点数'));assert(options.some(b=>b.textContent==='布尔值'));assert(options.some(b=>b.textContent==='无值'));
   assert.equal(options.find(b=>b.textContent==='数组').attrs['aria-selected'],'true');
+  assert.equal(f.context.typesOf(true).includes('integer'),true);
+  const defaults={type:'object',properties:{数量:{type:'integer',default:2432},颜色:{type:'string',default:'默认色'}},required:['数量','颜色']};
+  assert.deepEqual(plain(f.context.initialValue(defaults,defaults)),{数量:2432,颜色:'默认色'});
+  v.dispose();
+});
+
+test('projected array items show a projection badge with an explanatory hover hint',()=>{
+  const schema=object({SKU列表:{type:'array',items:{type:'object',title:'SKU项',properties:{as:{type:'integer'}},required:['as'],additionalProperties:false,'x-requiredPropertiesFrom':{pointer:'/区分键',propertySchemaByType:{integer:{type:'integer'}}}}}});
+  const f=fixture(schema,{SKU列表:[{as:2432}]}),v=f.view,path='$/SKU列表/0';
+  assert.equal(row(v,path).projected,true);
+  const labels=[],ctx=context2d();ctx.fillText=text=>labels.push(text);v.widget.draw(ctx,f.n,f.n.size[0],0);
+  assert(labels.includes('投影'));
+  const marker=target(v,`${path}:projection`);
+  assert.equal(marker.kind,'hint');assert.match(marker.hint,/“本次制作范围与规格\.SKU图\.制作配置\.区分键”/);
   v.dispose();
 });
 
@@ -999,6 +1583,218 @@ test('installed pointer and widget dispatch retain clicks across sizing and slow
   const open=f.view.isOpen(row(f.view,'$/group'));click('$/group:fold',true);assert.equal(f.view.isOpen(row(f.view,'$/group')),!open);
   let confirmed=0;f.view.render({actions:[{label:'确认',run(){confirmed++;}}]});click('footer:确认',true);assert.equal(confirmed,1);
   f.n.size[1]+=250;f.n.arrange();click('footer:确认',true);assert.equal(confirmed,2);assert(target(f.view,'footer:确认').rect.y>f.view.height);
+});
+
+test('restored inspector synchronizes native hit width before image and menu clicks',t=>{
+  const assets=path.resolve(__dirname,'../../../../python_embeded/Lib/site-packages/comfyui_frontend_package/static/assets');if(!fs.existsSync(assets))return t.skip('Installed frontend unavailable');
+  const bundle=fs.readdirSync(assets).filter(name=>/^settingStore-.*\.js$/.test(name)).map(name=>fs.readFileSync(path.join(assets,name),'utf8')).find(text=>text.includes('getWidgetOnPos(e,t,n=!1){'));
+  const start=bundle.indexOf('getWidgetOnPos(e,t,n=!1){'),end=bundle.indexOf('findInputSlot(',start);
+  const f=fixture(object({photo:{type:'string','x-image':{}}}),{photo:'image.png'}),v=f.view;
+  f.context.isInRectangle=(x,y,a,b,w,h)=>x>=a&&x<=a+w&&y>=b&&y<=b+h;f.context.Z={NODE_WIDGET_HEIGHT:20};
+  vm.runInContext('this.Hit=class {'+bundle.slice(start,end)+'}',f.context);
+  f.n.widgets[0].hidden=true;f.n.isWidgetVisible=w=>!w.hidden;f.n.getWidgetOnPos=f.context.Hit.prototype.getWidgetOnPos;
+  f.n.size[0]=1200;v.widget.width=300;v.widget.last_y=999;
+  paint(v);
+  assert.equal(v.widget.width,1200);assert.equal(v.widget.last_y,0);
+  let picked=0;v.chooseImage=()=>picked++;
+  paint(v);
+  for(const id of ['$/photo:image-mode','$/photo:image']){
+    const hit=v.targets.find(t=>t.id===id),p={x:hit.rect.x+hit.rect.w/2,y:hit.rect.y+hit.rect.h/2};
+    assert.equal(f.n.getWidgetOnPos(p.x,p.y),v.widget);
+    assert.equal(v.hit(p).id,id);hit.run();
+    if(v.popup)v.popup.close();
+  }
+  assert.equal(picked,1);assert.equal(v.value.photo,'image.png');v.dispose();
+});
+
+test('Ctrl click expands all descendants including folded list objects and preserves other branches',()=>{
+  const schema=object({group:object({items:{type:'array',items:object({nested:object({text:{type:'string'}})})}}),other:object({text:{type:'string'}})});
+  const f=fixture(schema,{group:{items:[{nested:{text:'a'}},{nested:{text:'b'}}]},other:{text:'c'}}),v=f.view;
+  for(const key of ['$/group','$/group/items','$/group/items/0','$/group/items/0/nested','$/group/items/1','$/group/items/1/nested','$/other'])v.expanded.set(key,false);
+  v.render();const hit=target(v,'$/group:fold');
+  v.point=e=>({x:e.clientX,y:e.clientY});v.active=()=>true;
+  const down={clientX:hit.rect.x+8,clientY:hit.rect.y+10,ctrlKey:true},cursor={eDown:down};
+  v.pointerDown(cursor,{});cursor.onClick({...down,ctrlKey:false});
+  for(const key of ['$/group','$/group/items','$/group/items/0','$/group/items/0/nested','$/group/items/1','$/group/items/1/nested'])assert.equal(v.expanded.get(key),true,key);
+  assert.equal(v.expanded.get('$/other'),false);
+  const order=[],set=v.expanded.set.bind(v.expanded);v.expanded.set=(key,value)=>{if(!value)order.push(key);return set(key,value);};
+  target(v,'$/group:fold').run({ctrlKey:true});
+  for(const key of ['$/group','$/group/items','$/group/items/0','$/group/items/0/nested','$/group/items/1','$/group/items/1/nested'])assert.equal(v.expanded.get(key),false,key);
+  for(const key of order){const parent=key.slice(0,key.lastIndexOf('/'));if(order.includes(parent))assert(order.indexOf(key)<order.indexOf(parent));}
+  assert.equal(order.at(-1),'$/group');assert(!order.includes('$/other'));
+  target(v,'$/group:fold').run({ctrlKey:true});assert.equal(v.expanded.get('$/group'),true);
+  target(v,'$/group:fold').run();assert.equal(v.expanded.get('$/group'),false);
+  assert.equal(v.expanded.get('$/group/items/1/nested'),true);
+  assert.equal(v.value.group.items[1].nested.text,'b');v.dispose();
+});
+
+test('double click resize corner fits all expanded nested lists without changing width or values',()=>{
+  const f=fixture(object({items:{type:'array',items:object({rows:{type:'array',items:{type:'string'}}})}}),{items:[{rows:Array(12).fill('text')},{rows:Array(8).fill('more')}]});
+  const v=f.view;for(const p of ['$/items','$/items/0','$/items/0/rows','$/items/1','$/items/1/rows'])v.expanded.set(p,true);
+  v.render();f.n.size[1]=220;f.n.arrange();paint(v);assert(v.lists.some(a=>a.viewport.h<a.total));
+  const width=f.n.size[0],value=plain(v.value);v.scroll.set('$/items',50);
+  v.point=e=>({x:e.clientX,y:e.clientY});v.active=()=>true;
+  let prevented=false;
+  v.doubleClickListener({target:v.canvas,clientX:width-3,clientY:f.n.size[1]-(v.widget.last_y??0)-3,preventDefault(){prevented=true;},stopImmediatePropagation(){}});
+  assert(prevented);assert.equal(f.n.size[0],width);assert([...v.scroll.values()].every(offset=>offset===0));
+  paint(v);for(const a of v.lists)assert(a.viewport.h>=a.total,`${a.path}: ${a.viewport.h} < ${a.total}`);
+  const fitted=f.n.size[1];assert(fitted>220);assert.deepEqual(plain(v.value),value);
+  f.n.size[1]+=500;f.n.arrange();paint(v);v.fitContentHeight();assert.equal(f.n.size[1],fitted);
+  v.dispose();
+});
+
+test('every fold change fits visible content without list scrolling and preserves width and values',()=>{
+  const schema=object({group:object({items:{type:'array',items:object({rows:{type:'array',items:{type:'string'}}})}})});
+  const value={group:{items:[{rows:Array(8).fill('a')},{rows:Array(6).fill('b')}]}};
+  const f=fixture(schema,value),v=f.view,width=f.n.size[0],original=plain(v.value);
+  for(const path of ['$/group','$/group/items','$/group/items/0','$/group/items/0/rows','$/group/items/1','$/group/items/1/rows'])v.expanded.set(path,false);
+  v.render();v.fitContentHeight();paint(v);
+  const collapsed=f.n.size[1];
+  target(v,'$/group:fold').run();paint(v);
+  assert(f.n.size[1]>collapsed);assert.equal(f.n.size[0],width);
+  target(v,'$/group/items:fold').run({ctrlKey:true});paint(v);
+  const expanded=f.n.size[1];assert(expanded>collapsed);
+  for(const area of v.lists)assert(area.viewport.h>=area.total,`${area.path}: ${area.viewport.h} < ${area.total}`);
+  assert([...v.scroll.values()].every(offset=>offset===0));assert.deepEqual(plain(v.value),original);
+  target(v,'$/group:fold').run();paint(v);
+  assert(f.n.size[1]<expanded);assert.equal(f.n.size[0],width);assert.deepEqual(plain(v.value),original);
+  v.dispose();
+});
+
+test('Ctrl arrow capture bypasses native selection before widget dispatch and toggles both ways',()=>{
+  const f=fixture(object({group:object({nested:object({text:{type:'string'}})})}),{group:{nested:{text:'x'}}}),v=f.view;
+  v.expanded.set('$/group',false);v.expanded.set('$/group/nested',false);v.render();v.point=e=>({x:e.clientX,y:e.clientY});v.active=()=>true;
+  function click({ctrlKey=true,drag=false,cancel=false,outside=false}={}){
+    const hit=target(v,'$/group:fold'),r=hit.arrowRect;
+    let stopped=0;const e={target:v.canvas,button:0,ctrlKey,pointerId:9,clientX:outside?r.x+40:r.x+8,clientY:r.y+12,stopImmediatePropagation(){stopped++;}};
+    f.document.fire('pointerdown',e);
+    if(stopped){
+      f.document.fire(cancel?'pointercancel':'pointerup',{...e,type:cancel?'pointercancel':'pointerup',clientX:e.clientX+(drag?20:0),ctrlKey:false});
+      assert.equal(stopped,2);
+    }
+    return stopped;
+  }
+  assert.equal(click({ctrlKey:false}),0);assert.equal(click({outside:true}),0);
+  assert.equal(click(),2);assert.equal(v.expanded.get('$/group/nested'),true);
+  assert.equal(click(),2);assert.equal(v.expanded.get('$/group'),false);assert.equal(v.expanded.get('$/group/nested'),false);
+  click({drag:true});assert.equal(v.expanded.get('$/group'),false);
+  click({cancel:true});assert.equal(v.expanded.get('$/group'),false);
+  v.dispose();assert(!f.document.events.pointerdown.includes(v.foldDownListener));
+});
+
+test('connected JSON is readonly, validates immediately, and source ports are mutually exclusive',async()=>{
+  const h=harness(),n=node(),schema=object({group:object({text:{type:'string'}})});
+  n.id=4;h.app.rootGraph.nodes=[n];h.context.findNodes=()=>[{node:n,path:'4'}];
+  n.addInput=(name,type,options)=>n.inputs.push({name,type,...options,link:null});
+  n.inputs.push({name:'values_json',link:17,type:'STRING'});
+  n.widgets[0].value=JSON.stringify({schema,value:{group:{text:'old'}},confirmed:true});
+  h.extension.setup();h.extension.nodeCreated(n);await flush();
+  assert(!n.inputs.some(i=>i.name==='sync_file'));const v=h.forms[0];assert.equal(v.readOnly,true);
+  h.handlers.get('liuxinyu.template_form_source')({detail:{node_id:'4',workflow_id:'root',schema,value:{group:{text:'input'}},imported:true}});await flush();
+  assert.equal(v.value.group.text,'input');assert.equal(target(v,'$/group/text:value').kind,'disabled');
+  v.commit('$/group/text',()=>{throw Error('must not mutate');},'changed');
+  assert(target(v,'$/group:fold').run);assert(!v.chrome.actions.some(a=>a.label==='确认'||a.label==='复位到模板'));
+  n.inputs.find(i=>i.name==='values_json').link=null;n.onConnectionsChange();await flush();
+  assert(n.inputs.some(i=>i.name==='sync_file'));assert.equal(v.readOnly,false);
+  n.inputs.find(i=>i.name==='sync_file').link=18;n.onConnectionsChange();await flush();
+  assert(!n.inputs.some(i=>i.name==='values_json'));assert.equal(v.readOnly,true);
+  h.handlers.get('liuxinyu.template_form_source')({detail:{node_id:'4',workflow_id:'root',schema,value:{group:{text:'file'}},sync_token:'token',imported:true}});await flush();
+  v.toggleSync();assert.equal(v.readOnly,false);
+  v.commit('$/group/text',row(v,'$/group/text').set,'edited');await flush();
+  assert.equal(h.requests.find(r=>r.url.endsWith('/sync-values')).body.value.group.text,'edited');
+  v.toggleSync();assert.equal(v.readOnly,true);n.onRemoved();
+});
+
+test('enabling file sync without a token reads the input chain and unlocks editing',async()=>{
+  const h=harness(),n=node(),schema=object({text:{type:'string'}});
+  n.inputs.push({name:'sync_file',link:18});
+  n.widgets[0].value=JSON.stringify({schema,value:{text:'cached'}});
+  let reads=0;
+  h.context.queueTemplateRefresh=async()=>{reads++;return {prompt_id:'read'};};
+  h.context.waitTemplateRefresh=async()=>({imported:true,schema,value:{text:'file'},sync_token:'fresh'});
+  h.extension.nodeCreated(n);await flush();const v=h.forms[0];
+  assert.equal(v.readOnly,true);await v.toggleSync();
+  assert.equal(reads,1);assert.equal(v.readOnly,false);assert.equal(v.value.text,'file');
+  v.commit('$/text',row(v,'$/text').set,'edited');await flush();
+  assert.equal(h.requests.find(r=>r.url.endsWith('/sync-values')).body.sync_token,'fresh');n.onRemoved();
+});
+
+test('restoring a checked sync flag without a token initializes without another click',async()=>{
+  const h=harness(),n=node(),schema=object({text:{type:'string'}});
+  n.inputs.push({name:'sync_file',link:18});n.properties={lxy_sync_input:true};
+  n.widgets[0].value=JSON.stringify({schema,value:{text:'cached'}});
+  let reads=0,finish;
+  h.context.queueTemplateRefresh=async()=>{reads++;return {prompt_id:'restore'};};
+  h.context.waitTemplateRefresh=()=>new Promise(resolve=>{finish=resolve;});
+  h.extension.nodeCreated(n);await flush();const v=h.forms[0];
+  assert.equal(reads,1);assert.equal(v.readOnly,true);
+  finish({imported:true,schema,value:{text:'restored file'},sync_token:'restored'});await flush();
+  assert.equal(v.readOnly,false);assert.equal(v.value.text,'restored file');
+  v.commit('$/text',row(v,'$/text').set,'written');await flush();
+  assert.equal(h.requests.find(r=>r.url.endsWith('/sync-values')).body.value.text,'written');n.onRemoved();
+});
+
+test('failed file initialization unchecks sync and preserves the cached value',async()=>{
+  const h=harness(),n=node(),schema=object({text:{type:'string'}});
+  n.inputs.push({name:'sync_file',link:18});n.widgets[0].value=JSON.stringify({schema,value:{text:'cached'}});
+  h.context.queueTemplateRefresh=async()=>{throw Error('file unavailable');};
+  h.extension.nodeCreated(n);await flush();const v=h.forms[0];await v.toggleSync();
+  assert.equal(n.properties.lxy_sync_input,false);assert.equal(v.readOnly,true);assert.equal(v.value.text,'cached');
+  assert.match(v.chrome.status,/file unavailable/);n.onRemoved();
+});
+
+test('changing source discards an in-flight file read',async()=>{
+  const h=harness(),n=node(),schema=object({text:{type:'string'}});
+  n.inputs.push({name:'sync_file',link:18});n.widgets[0].value=JSON.stringify({schema,value:{text:'cached'}});
+  let finish;h.context.queueTemplateRefresh=async()=>({prompt_id:'read'});
+  h.context.waitTemplateRefresh=()=>new Promise(resolve=>{finish=resolve;});
+  h.extension.nodeCreated(n);await flush();const v=h.forms[0],job=v.toggleSync();await flush();
+  n.inputs.find(i=>i.name==='sync_file').link=19;n.onConnectionsChange();await flush();
+  finish({imported:true,schema,value:{text:'old file'},sync_token:'old'});await job;
+  assert.equal(v.value.text,'cached');assert.equal(v.readOnly,true);assert.equal(n.properties.lxy_sync_input,false);n.onRemoved();
+});
+
+test('accepted edits still write when sync is unchecked before the queued write starts',async()=>{
+  const h=harness(),n=node(),schema=object({text:{type:'string'}});
+  n.inputs.push({name:'sync_file',link:18});n.properties={lxy_sync_input:true};
+  n.widgets[0].value=JSON.stringify({schema,value:{text:'file'},sync_token:'token'});
+  h.extension.nodeCreated(n);await flush();const v=h.forms[0];
+  v.commit('$/text',row(v,'$/text').set,'edited');v.toggleSync();await flush();
+  assert.equal(v.readOnly,true);assert.equal(h.requests.find(r=>r.url.endsWith('/sync-values')).body.value.text,'edited');n.onRemoved();
+});
+
+test('changing source before a queued write starts cancels the old-file write',async()=>{
+  const h=harness(),n=node(),schema=object({text:{type:'string'}});
+  n.inputs.push({name:'sync_file',link:18});n.properties={lxy_sync_input:true};
+  n.widgets[0].value=JSON.stringify({schema,value:{text:'file'},sync_token:'token'});
+  h.extension.nodeCreated(n);await flush();const v=h.forms[0];
+  v.commit('$/text',row(v,'$/text').set,'edited');
+  n.inputs.find(i=>i.name==='sync_file').link=19;n.onConnectionsChange();await flush();
+  assert.equal(h.requests.filter(r=>r.url.endsWith('/sync-values')).length,0);assert.equal(v.readOnly,true);n.onRemoved();
+});
+
+test('sync checkbox hover uses pointer and clears it on leave, disconnect and dispose',()=>{
+  const f=fixture(object({text:{type:'string'}}),{text:'x'}),v=f.view;
+  f.n.inputs.push({name:'sync_file',link:18});v.syncToggleRect={x:200,y:-30,w:14,h:14};
+  const event={target:v.canvas,clientX:205,clientY:-25};
+  v.readOnly=true;v.pointerMove(event);assert.equal(v.canvas.style.cursor,'pointer');
+  v.busy=true;v.pointerMove(event);assert.equal(v.canvas.style.cursor,'pointer');
+  v.pointerMove({...event,clientX:900});assert.equal(v.canvas.style.cursor,'');
+  v.pointerMove(event);f.n.inputs.find(i=>i.name==='sync_file').link=null;
+  v.pointerMove(event);assert.equal(v.canvas.style.cursor,'');
+  f.n.inputs.find(i=>i.name==='sync_file').link=18;v.pointerMove(event);
+  v.dispose();assert.equal(v.canvas.style.cursor,'');
+});
+
+test('readonly paints no row overlay and removes disabled hover while folds remain hoverable',()=>{
+  const f=fixture(object({text:{type:'string'},group:object({value:{type:'string'}})}),{text:'x',group:{value:'y'}}),v=f.view;
+  v.readOnly=true;paint(v);const ctx=context2d(),fills=[],texts=[];
+  ctx.fillRect=(...rect)=>fills.push({rect,color:ctx.fillStyle});ctx.fillText=()=>texts.push(ctx.fillStyle);
+  v.draw(ctx);assert(!fills.some(x=>x.color==='rgba(45,45,45,0.35)'));assert(texts.includes('#777'));
+  v.point=e=>({x:e.clientX,y:e.clientY});
+  let t=v.targets.find(t=>t.id==='$/text:value');v.pointerMove({target:v.canvas,clientX:t.rect.x+2,clientY:t.rect.y+2});assert.equal(v.hover,undefined);
+  t=v.targets.find(t=>t.id==='$/group:fold');v.pointerMove({target:v.canvas,clientX:t.arrowRect.x+2,clientY:t.arrowRect.y+2});assert.equal(v.hover,t.id);
+  v.dispose();
 });
 
 test('installed native layout excludes internal state and reserves ports above the entire inspector',t=>{

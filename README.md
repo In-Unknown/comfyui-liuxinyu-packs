@@ -52,6 +52,8 @@ git clone https://github.com/In-Unknown/comfyui-liuxinyu-packs.git
 
 安装后重启 ComfyUI，再刷新浏览器。搜索“字符串转为字面量”或“JSON Schema填写模版”，确认节点已经加载。
 
+JSON Schema填写模版支持可选填写值 JSON 输入口，以及通过 Windows 系统保存框单独保存填写配置。配置保留模板绑定和动态字段设置，输入时只读显示，校验通过直接输出；文件路径来源可开启同步编辑自动写回；见[保存与导入配置](docs/LiuxinyuTemplateForm.md#单独保存和导入填写配置)。
+
 ### 更新
 
 在本包目录运行：
@@ -85,15 +87,21 @@ git pull --ff-only
 
 本文箭头表示端口连线，**不是可直接导入的工作流 JSON**。表格中的链接提供详细参数说明；已有节点帮助页也可从“选中节点 → 属性面板 → 信息”打开。
 
+JSON Schema填写模版支持可选填写值 JSON 输入和 Windows 系统另存为配置文件；具体端口、模板匹配及复用示例见[保存与导入配置](docs/LiuxinyuTemplateForm.md#单独保存和导入填写配置)。
+
 ## 前端功能
+
+本包支持[前端版本检测与自动刷新](docs/FrontendVersion.md)：后端每 5 秒询问页面版本，旧页面自动刷新一次，带同版本循环保护。首次安装需手动刷新以加载握手扩展。
 
 本包既有自动生效的画布与侧栏扩展，也有节点上的交互控件。下面按实际使用场景列出功能；前端脚本和公共模块不计入用户节点数量。新增或更新 JS 后刷新页面，仍显示旧界面时使用 `Ctrl+F5` 强制刷新；仅更新本节文档不需要刷新或重启。
 
 ### 工作区、节点辨认与界面修正
 
+[画布滚轮平移](docs/CanvasWheelPan.md)：Shift＋滚轮上下移动画布镜头，Ctrl＋滚轮左右移动；同时按下以 Ctrl 为准。缩放比例及节点位置保持不变，普通滚轮沿用列表滚动和画布缩放，刷新页面生效。
+
 [Shift 准直移动](docs/AxisDrag.md)：拖动节点、多选或组时按住Shift，以本次起点锁定更接近的水平/垂直方向并显示辅助线；提前按Shift则由首次非零移动决定方向。保持组内相对位置，松开Shift立即补回被约束的位移并跟随鼠标恢复自由移动，锁轴优先于松手网格吸附。默认不按Shift保持原生移动。刷新页面生效，无需添加节点。
 
-[活动节点总览](docs/Activity.md)：右侧“工作流总览”的首个“活动”标签，每次执行开始时自动打开，完成或中断后恢复运行前的收起状态或标签；原来就在活动页则保持。发生执行错误或原生打开错误标签时立即让出显示并取消恢复，不覆盖错误界面。集中显示正在运行节点的只读镜像，实时加入／移除、按内容扩展尺寸，点击复用 Ctrl+F 定位；节点对象稳定后持续改变高度时，可用“连续跟踪”开关跟随其底部。经典画布及第三方控件的兼容范围见详细说明。
+[活动节点总览](docs/Activity.md)：右侧“工作流总览”的首个“活动”标签，执行持续 5 秒仍未结束才自动打开，短任务不弹出；自动打开后完成或中断则恢复运行前的收起状态或标签；原来就在活动页则保持。发生执行错误或原生打开错误标签时立即让出显示并取消恢复，不覆盖错误界面。集中显示正在运行节点的只读镜像，实时加入／移除、按内容扩展尺寸，点击复用 Ctrl+F 定位；节点对象稳定后持续改变高度时，可用“连续跟踪”开关跟随其底部。经典画布及第三方控件的兼容范围见详细说明。
 
 | 功能 | 在哪里、怎样使用 | 范围与行为 |
 | --- | --- | --- |
@@ -147,7 +155,7 @@ git pull --ff-only
 | --- | --- | --- |
 | 超长图片浏览 | [预览超长图片](docs/LiuxinyuPreviewLongImage.md) | 多图显示缩略图网格，单击进入单图；超宽图横向滚动，超高图纵向滚动，查看起点由节点方向选项决定。左右方向键切图，Esc 或关闭按钮返回；拖动节点尺寸改变视口。长图缩略图可能只显示开头，进入单图才能看完整内容。 |
 | 文本与参数组合表格 | [预览参数组合或字符串数组](docs/LiuxinyuPreviewText.md) | 参数组合按 `t1`、`t2` 等分列，字符串列表按下标显示，单个字符串保留换行。连续滚动浏览，可见行列按需呈现，点击“复制全部”复制内容；普通滚轮滚动表格，`Ctrl+滚轮`缩放画布。 |
-| 对象与数组树 | [预览JS对象或数组](docs/LiuxinyuPreviewJSObject.md) | 点击箭头逐层展开，显示键、下标、类型和值；点选条目查看完整内容。“复制JSON”复制整体，“复制此值”复制当前详情，“收起”收拢树；滚轮浏览内容，`Ctrl+滚轮`缩放画布。 |
+| 对象与数组树 | [预览JS对象或数组](docs/LiuxinyuPreviewJSObject.md) | 点击箭头逐层展开，显示键、下标、类型和值；点选条目查看完整内容。右上角复制图标复制整体，“复制此值”复制当前详情，箭头控制收起；滚轮仅在内容实际滚动时拦截，边界和快捷键交还画布。 |
 | 字面量类型提示 | [字符串转为字面量](docs/LiuxinyuStringToLiteral.md)节点内 | 未运行时显示“类型：等待运行”，运行后显示后端返回的解析类型；多项类型去重显示。提示用于理解结果，不改变两个输出口各自的整体/展开语义。 |
 | 画笔与蒙版编辑入口 | [绘制蒙版绘制画笔于比例图像](docs/LiuxinyuRatioPaint.md)的“打开遮罩编辑器” | 先执行所需上游并更新底图，再打开官方遮罩编辑器；保存退出后再次运行，才向下游输出合成图像与蒙版。同比例底图复用图层，比例改变需重新绘制；图层文件应随工作流备份。 |
 
@@ -202,7 +210,7 @@ git pull --ff-only
 | [canvas_background.js](canvas_background.js)、[canvas_background.css](canvas_background.css) | 画布图片背景入口与紧凑面板、图片共享边界对齐物理像素消除绘制缝隙、矢量网格、组内淡化、原生快捷键兼容及静默自动保存 |
 | [canvas_background_layout.js](canvas_background_layout.js)、[canvas_background_worker.js](canvas_background_worker.js) | 保比例电路密铺、几何校验、同图分散、最多 10 层嵌套及后台计算 |
 | [canvas_background_storage.js](canvas_background_storage.js) | 用户目录图片副本与配置、旧 IndexedDB 迁移读取、写入超时及错误诊断 |
-| [workspace_labels.js](workspace_labels.js) | 工作区文字、文件后缀及系统打开入口；后端配合 [workspace_files.py](workspace_files.py) |
+| [workspace_labels.js](workspace_labels.js) | 工作区文字、文件后缀、系统打开及右键“跳转到对应文件夹”（在资源管理器选中文件或文件夹）；后端配合 [workspace_files.py](workspace_files.py)，见[操作说明](docs/WorkspaceLabels.md#跳转到对应文件夹) |
 | [workflow_file_sync.js](workflow_file_sync.js) | 文件变动提示、手动同步、未保存差异 |
 | [node_json_id.js](node_json_id.js)、[original_node_name.js](original_node_name.js) | 节点 ID 与原始名称标记 |
 | [port_order.js](port_order.js) | 悬浮端口后用方向键交换显示顺序、子图边界免选中与内外双向同步、快捷键提示及工作流持久化 |
@@ -317,7 +325,7 @@ git pull --ff-only
 | [字符串排列组合](docs/LiuxinyuStringCombinations.md) | 对多组候选求所有组合，输出 `t1`、`t2` 等参数；可按候选下标规则排除组合。 | `LiuxinyuStringCombinations` |
 | [从模板生成文本](docs/LiuxinyuTextFromTemplate.md) | 替换 `{t1}`、`{t2}` 等占位符；接排列组合后逐条生成提示词。 | `LiuxinyuTextFromTemplate` |
 | [预览参数组合或字符串数组](docs/LiuxinyuPreviewText.md) | 表格或文本方式浏览参数组合、字符串列表及单条文本，无输出。 | `LiuxinyuPreviewText` |
-| [预览JS对象或数组](docs/LiuxinyuPreviewJSObject.md) | 树状展开对象/数组，查看类型、下标和值，可复制 JSON，无输出。 | `LiuxinyuPreviewJSObject` |
+| [预览JS对象或数组](docs/LiuxinyuPreviewJSObject.md) | 节点原生画布内部绘制对象/数组树、详情与滚动条，无 HTML 浮层；Ctrl 点击箭头递归展开／收起，展开默认按内容自然增高、无列表高度上限，双击右下角恢复适配高度；查看类型、下标和值，完整 JSON 详情支持语法着色，可复制 JSON，无输出。 | `LiuxinyuPreviewJSObject` |
 
 ### 类型转换、数组与执行列表（26个）
 
@@ -343,12 +351,14 @@ git pull --ff-only
 | [下标提取数组元素为新数组](docs/LiuxinyuExtractArray.md) | 按整数下标数组的顺序提取元素，保留重复下标和元素类型；下标从 0 开始，越界报错，完整 ARRAY 输入输出。 | `LiuxinyuExtractArray` |
 | [下标范围提取数组](docs/LiuxinyuArrayRange.md) | 提取下标 min 到 max 闭区间内的连续元素，包含两端；从 0 开始，越界或 min>max 报错，输出完整 ARRAY。 | `LiuxinyuArrayRange` |
 | [分块提取数组为数组](docs/LiuxinyuArrayChunk.md) | 按正整数窗口块大小连续、不重叠地分块，末尾余项单独保留；输出元素为数组的完整 ARRAY，空数组输出空数组。 | `LiuxinyuArrayChunk` |
-| [JSON Schema填写模版](docs/LiuxinyuTemplateForm.md) | STRING 输入 Draft 2020-12 默认方言，节点内 Inspector 支持受父容器约束的嵌套列表（空间足够时完整展开，仅空间不足时滚动，无固定高度上限）、展开层级灰色引导线、随工作流保存并恢复的展开／收起状态、独立字段焦点与条目选择、整项沿列表轨道拖动和连续动画让位、键值对应淡虚线（选中项引导线为 #353535）、受父容器约束的值框与列表项留白、按字形居中的文字及同字体同坐标原位编辑、键盘操作。底部按钮随节点尺寸保持右下角对齐；最左侧可计算上游输入链以更新模板缓存，保留兼容填写值且不执行下游；可复位到输入模板，独立保存模板快照与复位前备份。支持条件／组合字段、作用域及 HTTP(S) 引用、通用类型编辑（带箭头中文类型下拉框，null 显示“无值”）、拖动、滑块、矢量、日期时间和 HEX 颜色。format 按注解处理；按原始规则校验，下拉菜单参考 Box Collider 样式，与触发框等宽、同字号并随画布缩放，支持再次点击收起及按住拖选；字段旁红色错误提示完整换行，并以边框关联对应字段或展开组，自动提示使用显示名，下方错误卡片保持原样；校验失败自动展开错误层级；进入持续校验后每次修改重新检查整份结果，保留旧提示直到新结果返回，全部通过才结束，不自动确认或继续执行；日志式错误区域显示点分隔的完整路径，中文原因自动换行，支持 Schema 作者以 x-error-message 注解自定义报错、未设置时自动解释；注解不生成表单字段或输出数据，[独立中文规则描述包](docs/SchemaChinese.md)按逻辑结构生成要求，禁止条件列出实际字段和值、可推导时直接给出修改选项，点击错误可逐层滚动并在扣除分栏遮挡后的可见画布中央定位字段；Python 发送 Windows 原生通知，点击优先激活已打开目标工作流的页面，失败才新开；模板更新时补齐必填键，同名同类型保留，类型冲突重建并仅在新规则允许时生成编号备份键；变更后须重新确认，已确认且结构不变、合法时复用；执行结束保留已解析控件规则，解析期间不退回任意类型编辑。资源与数值限制见帮助。 | `LiuxinyuTemplateForm` |
+| [JSON Schema填写模版](docs/LiuxinyuTemplateForm.md) | STRING 输入 Draft 2020-12 默认方言，支持 x-file 任意文件（Python 系统选取真实路径，自动以 512 KB 为界分流纯 Base64／路径，单行文件名与模式切换），支持 x-image 图片字段（空图片单行、点击选择／替换、区域粘贴按来源保存、下拉切换原始链接／路径、复制并保存路径与 Base64 Data URL；自动模式按 512 KiB 阈值在原始路径和 Base64 之间选择），节点内 Inspector 支持逐层上报字段最小宽度至节点、值框与类型框平分额外宽度，类型／枚举／结构分支触发框以最宽选项加勾选栏及边距确定最小宽度、展开菜单跟随触发框实际宽度，支持受父容器约束的嵌套列表（空间足够时完整展开，仅空间不足时滚动，无固定高度上限）、展开层级灰色引导线、随工作流保存并恢复的展开／收起状态、独立字段焦点与条目选择、整项沿列表轨道拖动和连续动画让位、键值对应淡虚线（选中项引导线为 #353535）、受父容器约束的值框与列表项留白、按字形居中的文字及同字体同坐标原位编辑、键盘操作。底部按钮随节点尺寸保持右下角对齐；最左侧可计算上游输入链以更新模板缓存，保留兼容填写值且不执行下游；可复位到输入模板，独立保存模板快照与复位前备份。支持条件／组合字段、作用域及 HTTP(S) 引用、通用类型编辑（带箭头中文类型下拉框，整数与浮点数可分别选择，自由字段还可选择图片、文件、日期、时间、日期时间、HEX 颜色；格式选择随工作流保存并参与投影、提交及复用校验，null 显示“无值”）、拖动、滑块、矢量、日期时间和 HEX 颜色。format 按注解处理；按原始规则校验，下拉菜单参考 Box Collider 样式，与触发框等宽、同字号并随画布缩放，支持再次点击收起及按住拖选；字段旁红色错误提示完整换行，并以边框关联对应字段或展开组，自动提示使用显示名，下方错误卡片保持原样；校验失败自动展开错误层级；进入持续校验后每次修改重新检查整份结果，保留旧提示直到新结果返回，全部通过才结束，不自动确认或继续执行；日志式错误区域显示点分隔的完整路径，中文原因自动换行，支持 Schema 作者以 x-error-message 注解自定义报错、未设置时自动解释；注解不生成表单字段或输出数据，[独立中文规则描述包](docs/SchemaChinese.md)按逻辑结构生成要求，禁止条件列出实际字段和值、可推导时直接给出修改选项，点击错误可逐层滚动并在扣除分栏遮挡后的可见画布中央定位字段；Python 发送 Windows 原生通知，点击优先激活已打开目标工作流的页面，失败才新开；模板更新时补齐必填键，同名同类型保留，类型冲突重建并仅在新规则允许时生成编号备份键；变更后须重新确认，已确认且结构不变、合法时复用；执行结束保留已解析控件规则，解析期间不退回任意类型编辑。支持 `x-requiredPropertiesFrom` 扩展：依据填写结果中的 JSON Pointer，将来源对象的动态键展开为目标对象的必填属性并参与后端校验，来源当前值作为新增数组项默认值；每个投影数组项标题显示“投影”标记并提供悬停说明。资源与数值限制见帮助。 | `LiuxinyuTemplateForm` |
 | [携包循环·开始](docs/LiuxinyuPacketReturnStart.md) | 仅对执行列表逐包执行，普通数组须先转换；携带上一轮完整数据；空包跳过，耗尽后可复用最后一包。 | `LiuxinyuPacketReturnStart` |
 | [携包循环·结束](docs/LiuxinyuPacketReturnEnd.md) | 将还有下一包与输入布尔做六种逻辑运算；true 回归，false 输出最终数据。 | `LiuxinyuPacketReturnEnd` |
 | [执行列表收集为数组](docs/LiuxinyuCollectExecutionList.md) | 把完整执行列表收集为一个 ARRAY，保留顺序和嵌套；接字符串端口前需显式序列化。 | `LiuxinyuCollectExecutionList` |
 | [顺合任意执行列表](docs/LiuxinyuConcatAnyExecutionLists.md) | 按输入口从上到下的顺序将各路执行列表首尾相接，保留内部顺序、重复项和类型，不递归拆分数组或图片批次；可串联继续顺合。 | `LiuxinyuConcatAnyExecutionLists` |
 | [结构化数据变换（JSONata）](docs/LiuxinyuStructuredTransform.md) | 用 JSONata 处理最多 100 路 JSON 数据，声明并严格检查结果类型；单一结果出口，另有执行成功与错误信息。需安装 `jsonata-python==0.6.3`。 | `LiuxinyuStructuredTransform` |
+
+JSON Schema 填写模版的格式约束会在编辑时拦截不可能合法的字符串；类型切换清空旧值，Shift+Enter 在原字段位置展开多行输入，双击动态字段名可改名，对象型列表新增项默认展开。普通与递归投影分别标记，字段必选性由 Schema 的 `required` 声明控制；详见[节点帮助](docs/LiuxinyuTemplateForm.md)。
 
 ### 数学与函数采样（11个）
 

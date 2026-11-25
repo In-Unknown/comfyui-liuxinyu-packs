@@ -4,6 +4,66 @@ import { api } from "../../scripts/api.js";
 const PANEL = '[data-testid="workflows-sidebar"]';
 const TREE_PREFIX = "tree-node-root/";
 
+function workspaceTreeNode(element, key) {
+  // Production Vue omits __vueParentComponent. The renderer retains the
+  // mounted vnode tree on its application container in production as well.
+  const roots = document.querySelectorAll('[data-v-app]');
+  const stack = Array.from(roots, (root) => root._vnode).filter(Boolean);
+  const seen = new Set();
+  while (stack.length) {
+    const vnode = stack.pop();
+    if (!vnode || typeof vnode !== "object" || seen.has(vnode)) continue;
+    seen.add(vnode);
+    const node = vnode.component?.props?.node || vnode.props?.node;
+    if (vnode.el === element && node?.key === key) return node;
+    if (vnode.component?.subTree) stack.push(vnode.component.subTree);
+    if (Array.isArray(vnode.children)) stack.push(...vnode.children);
+    if (vnode.suspense?.activeBranch) stack.push(vnode.suspense.activeBranch);
+  }
+  return null;
+}
+
+function installWorkspaceReveal() {
+  const decorated = new WeakSet();
+  document.addEventListener("contextmenu", (event) => {
+    if (!event.target?.closest?.(PANEL)) return;
+    const row = event.target.closest(".p-tree-node-content");
+    const element = row?.querySelector('.tree-node[data-testid^="tree-node-root/"]');
+    const key = element?.getAttribute("data-testid")?.slice("tree-node-".length);
+    if (!key?.startsWith("root/")) return;
+    // Adapt the native TreeExplorer node BEFORE its bubble handler builds the
+    // menu. Native rendering, keyboard navigation and dismissal remain intact.
+    const node = workspaceTreeNode(element, key);
+    if (node) {
+        if (decorated.has(node)) return;
+        const original = node.contextMenuItems;
+        node.contextMenuItems = function (...args) {
+          const items = typeof original === "function" ? original.apply(this, args) : original;
+          const path = node.key.slice("root/".length);
+          return [...(items || []), {
+            label: "跳转到对应文件夹", icon: "pi pi-folder-open", visible: true,
+            isAsync: true,
+            command: async () => {
+              try {
+                const response = await api.fetchApi("/liuxinyu/workspace/reveal", {
+                  method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ path }),
+                });
+                const data = await response.json();
+                if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
+              } catch (error) {
+                app.extensionManager.toast.add({ severity: "error", summary: "无法跳转到对应文件夹",
+                  detail: `${path}\n${error.message}`, life: 8000 });
+              }
+            },
+          }];
+        };
+        decorated.add(node);
+        return;
+    }
+  }, true);
+}
+
 function externalFileForClick(event) {
   if (event.button !== 0 || event.defaultPrevented) return null;
   const target = event.target;
@@ -92,6 +152,7 @@ app.registerExtension({
   name: "liuxinyu.WorkspaceLabels",
   setup() {
     installExternalFileOpener();
+    installWorkspaceReveal();
     // Follow WorkflowFileSync's store adapter. Keep the tab ID/component so
     // native navigation, shortcuts and workflow persistence stay intact.
     const tabs = app.extensionManager?.workflow?._p?._s?.get("sidebarTab");

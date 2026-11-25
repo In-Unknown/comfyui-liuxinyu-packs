@@ -123,6 +123,37 @@ class WorkspaceFilesTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status, 400)
             start.assert_not_called()
 
+    async def test_reveal_files_and_folders_with_literal_names(self):
+        named = self.root / "中文 空格,百分%20"
+        named.mkdir()
+        for target in (self.file, named):
+            request = Request({"path": target.relative_to(self.root).as_posix()})
+            with patch.object(module, "reveal_in_explorer") as reveal:
+                response = await module.reveal_workspace_item(request)
+                self.assertEqual(response.status, 200)
+                self.assertEqual(json.loads(response.body), {"revealed": True})
+                reveal.assert_called_once_with(target.resolve())
+                self.manager.get_request_user_filepath.assert_called_with(request, None, create_dir=False)
+
+    async def test_reveal_rejects_invalid_missing_and_unknown_user(self):
+        with patch.object(module, "reveal_in_explorer") as reveal:
+            for data, status in [([], 400), ({}, 400), ({"path": "../outside"}, 400),
+                                 ({"path": "C:/Windows"}, 400), ({"path": "missing"}, 404)]:
+                response = await module.reveal_workspace_item(Request(data))
+                self.assertEqual(response.status, status)
+            request = Request({"path": self.relative})
+            request.content_type = "text/plain"
+            self.assertEqual((await module.reveal_workspace_item(request)).status, 400)
+            self.manager.get_request_user_filepath.return_value = None
+            self.assertEqual((await module.reveal_workspace_item(Request({"path": self.relative}))).status, 403)
+            reveal.assert_not_called()
+
+    async def test_reveal_shell_failure(self):
+        with patch.object(module, "reveal_in_explorer", side_effect=OSError("shell failure")):
+            response = await module.reveal_workspace_item(Request({"path": self.relative}))
+        self.assertEqual(response.status, 500)
+        self.assertIn("shell failure", json.loads(response.body)["error"])
+
     def test_resolved_symlink_cannot_escape_workspace(self):
         outside = self.user_root / "outside.md"
         outside.write_text("outside", encoding="utf-8")

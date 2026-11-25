@@ -1,5 +1,18 @@
+import { photoshopPicker } from "./template_color_picker.js";
+import { api } from "../../scripts/api.js";
 // Temporary editors only. The persistent form is drawn inside the node canvas.
 export const formFont='14px "Microsoft YaHei", sans-serif';
+export function formStringLines(value,width,measure){
+  const result=[],parts=String(value??'').split(/\r\n|\r|\n/);
+  parts.forEach((part,index)=>{
+    let text='';
+    for(const char of part){
+      if(text&&measure(text+char)>Math.max(1,width)){result.push({text,hardEnd:false});text='';}
+      text+=char;
+    }
+    result.push({text,hardEnd:index<parts.length-1});
+  });return result;
+}
 export function formTextLayout(ctx,text='国Ag09'){
   const m=ctx.measureText(String(text||'国Ag09'));
   const ink=(m.actualBoundingBoxAscent??11)-(m.actualBoundingBoxDescent??3);
@@ -8,6 +21,71 @@ export function formTextLayout(ctx,text='国Ag09'){
 export const formMenuUnit=14/12;
 export const formMenuFont='14px LxyInspectorInter, sans-serif';
 export const formMenuFontReady=typeof FontFace==='undefined'?Promise.resolve():new FontFace('LxyInspectorInter','url("/extensions/comfyui-liuxinyu-packs/fonts/Inter-Regular.ttf")').load().then(font=>document.fonts.add(font)).catch(error=>console.warn('[liuxinyu.TemplateForm] Inter 字体加载失败',error));
+const fullMatch=(expression,value)=>{try{return new RegExp(`^(?:${expression})$`).test(value);}catch{return false;}};
+const patternMatch=(expression,value)=>{try{return new RegExp(expression).test(value);}catch{return false;}};
+function matchesPatternPrefix(pattern,value){
+  const source=pattern.replace(/^\^/,'').replace(/\$$/,'');let inClass=false,escaped=false;
+  const cuts=[0];
+  for(let i=0;i<source.length;i++){
+    const char=source[i];if(escaped){escaped=false;cuts.push(i+1);continue;}if(char==='\\'){escaped=true;continue;}
+    if(char==='[')inClass=true;else if(char===']')inClass=false;
+    if(!inClass&&char!==']')cuts.push(i+1);
+  }
+  for(const cut of cuts){
+    const fragment=source.slice(0,cut);let prefix='',classMode=false,slash=false;
+    for(let i=0;i<fragment.length;i++){
+      const char=fragment[i];
+      if(slash){prefix+=char;slash=false;continue;}
+      if(char==='\\'){prefix+=char;slash=true;continue;}
+      if(char==='[')classMode=true;else if(char===']')classMode=false;
+      if(!classMode&&char==='+'){prefix+='*';continue;}
+      if(!classMode&&char==='{'){
+        const quantifier=fragment.slice(i).match(/^\{(\d+)(?:,(\d*))?\}/);
+        if(quantifier){prefix+=`{0,${quantifier[2]||quantifier[1]}}`;i+=quantifier[0].length-1;continue;}
+      }
+      prefix+=char;
+    }
+    try{if(new RegExp(`^(?:${prefix})$`).test(value))return true;}catch{}
+  }
+  return false;
+}
+export function acceptsSchemaInput(schema,value,previous='',complete=false){
+  if(value==='')return true;
+  const pattern=schema?.pattern,patternValid=!pattern||patternMatch(pattern,value);
+  const format=schema?.format;
+  if(format){
+    const valid={email:/^[^\s@]+@[^\s@]+\.[^\s@]+$/,uri:/^[A-Za-z][A-Za-z\d+.-]*:[^\s]*$/,"uri-reference":/^(?:[A-Za-z][A-Za-z\d+.-]*:)?[^\s]*$/,"iri":/^[A-Za-z][A-Za-z\d+.-]*:[^\s]*$/,"iri-reference":/^(?:[A-Za-z][A-Za-z\d+.-]*:)?[^\s]*$/,hostname:/^(?=.{1,253}$)(?:[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?)(?:\.(?:[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?))*$/i,ipv4:/^(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/,ipv6:/^[\da-f:]+$/i,"date":/^\d{4}-\d{2}-\d{2}$/,"time":/^\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?$/i,"date-time":/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?$/i,duration:/^-?P(?=\d|T\d)(?:\d+Y)?(?:\d+M)?(?:\d+W)?(?:\d+D)?(?:T(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?)?$/i,"json-pointer":/^(?:\/(?:[^~/]|~[01])*)*$/,"relative-json-pointer":/^\d+(?:#|(?:\/(?:[^~/]|~[01])*)*)$/,"regex":/^[\s\S]*$/,"uri-template":/^[^\s{}]*(?:\{[^{}]+\}[^\s{}]*)*$/,"uuid":/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i,color:/^#[\da-f]{6}(?:[\da-f]{2})?$/i};
+    const exact=valid[format];
+    if(exact){
+      if(exact.test(value)){
+        if(format==='date'||format==='date-time'){
+          const day=value.slice(0,10),[year,month,date]=day.split('-').map(Number),check=new Date(0);check.setUTCFullYear(year,month-1,date);
+          if(check.getUTCFullYear()!==year||check.getUTCMonth()!==month-1||check.getUTCDate()!==date)return false;
+        }
+        if(format==='time'||format==='date-time'){
+          const time=value.slice(format==='time'?0:11),match=time.match(/^(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-](\d{2}):(\d{2}))?$/i);
+          if(!match||Number(match[1])>23||Number(match[2])>59||Number(match[3]||0)>59||Number(match[5]||0)>23||Number(match[6]||0)>59)return false;
+        }
+        if(format==='ipv6'){try{new URL(`http://[${value}]`);return patternValid;}catch{}}
+        else if(format==='regex'){try{new RegExp(value);}catch{return false;}return patternValid;}
+        else return patternValid;
+      }
+      if(complete)return false;
+      const partial={email:/^[^\s@]*@?[^\s@]*(?:\.[^\s@]*)?$/,uri:/^[A-Za-z][A-Za-z\d+.-]*:?[^\s]*$/,"uri-reference":/^[A-Za-z\d+.-]*:?[^\s]*$/,iri:/^[A-Za-z][A-Za-z\d+.-]*:?[^\s]*$/,"iri-reference":/^[A-Za-z\d+.-]*:?[^\s]*$/,hostname:/^[a-z\d.-]*$/i,ipv4:/^[\d.]*$/,ipv6:/^[\da-f:]*$/i,date:/^[\d-]{0,10}$/,time:/^[\d:.+Z-]*$/i,"date-time":/^[\dT:.+Z-]*$/i,duration:/^-?P[\dYMWDT.HS-]*$/i,"json-pointer":/^(?:\/[^~]*(?:~[01][^~]*)*)*$/,"relative-json-pointer":/^\d*(?:#|(?:\/[^~]*(?:~[01][^~]*)*)*)?$/,regex:/^[\s\S]*$/,"uri-template":/^[^\s{}]*(?:\{[^{}]*\}[^\s{}]*)*$/,uuid:/^[\da-f-]*$/i,color:/^#?[\da-f]*$/i};
+      if(partial[format])return partial[format].test(value)&&(!pattern||patternValid||matchesPatternPrefix(pattern,value));
+      if(format==='ipv6'){try{new URL(`http://[${value}]`);return true;}catch{return /^(?:[\da-f]{0,4}:?)*$/i.test(value);}}
+      if(format==='uri-template')return value.split('{').length-value.split('}').length<=1;
+      return false;
+    }
+    return false;
+  }
+  if(value===previous&&!complete)return true;
+  if(!pattern)return true;
+  if(patternValid)return true;
+  if(complete)return false;
+  if(!pattern.startsWith('^'))return true;
+  return matchesPatternPrefix(pattern,value);
+}
 const popupCSS = `
 .lxy-form-popup{position:fixed;z-index:10000;box-sizing:border-box;background:#383838;color:#ccc;color-scheme:dark;border:1px solid #666;border-radius:3px;padding:10px;font:13px sans-serif;box-shadow:0 4px 16px #0006;overflow:auto;max-height:90vh;outline:none!important}
 .lxy-form-popup *{box-sizing:border-box;font:inherit;letter-spacing:normal}
@@ -27,17 +105,34 @@ const popupCSS = `
 .lxy-form-popup .time-column{height:150px;overflow:auto;scrollbar-width:thin;scrollbar-color:#777 #303030;background:#303030}
 .lxy-form-popup .time-column button{width:100%;border:0;border-radius:0;background:transparent;height:28px;padding:0}.lxy-form-popup .time-column .selected{background:#526873}
 .lxy-form-popup.lxy-form-menu{padding:0;border:1px solid #636363;border-radius:0;background:#3c3c3c;box-shadow:none;scrollbar-width:thin;transform-origin:top left;font:12px LxyInspectorInter,sans-serif;overflow-x:hidden}
-.lxy-form-popup .menu-item{position:relative;display:block;text-align:left;width:100%;height:20px;min-height:20px;line-height:20px;padding:0 13px 0 21px;border:0;border-radius:0;background:#3c3c3c;color:#aaa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;outline:none!important;cursor:default}
+.lxy-form-popup .menu-item{position:relative;display:block;text-align:left;width:100%;height:20px;min-height:20px;line-height:20px;padding:0 4px 0 21px;border:0;border-radius:0;background:#3c3c3c;color:#aaa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;outline:none!important;cursor:default}
 .lxy-form-popup .menu-item:nth-child(even){background:#3f3f3f}
 .lxy-form-popup .menu-item:hover,.lxy-form-popup .menu-item:active{background:#3c3c3c}
 .lxy-form-popup .menu-item:nth-child(even):hover,.lxy-form-popup .menu-item:nth-child(even):active{background:#3f3f3f}
 .lxy-form-popup .menu-item.is-highlighted,.lxy-form-popup .menu-item.is-highlighted:hover,.lxy-form-popup .menu-item.is-highlighted:active{background:#3e5f96;color:#ddd}
 .lxy-form-popup .menu-item[aria-selected=true]::before{content:'';position:absolute;left:7px;top:5px;width:3px;height:7px;border:solid #b6b6b6;border-width:0 1.5px 1.5px 0;transform:rotate(35deg)}
+.lxy-form-popup .menu-option-row{position:relative;height:20px;background:#3c3c3c}
+.lxy-form-popup .menu-option-row:nth-child(even){background:#3f3f3f}
+.lxy-form-popup .menu-option-row>.menu-item{background:transparent;padding-right:44px}
+.lxy-form-popup .menu-option-row>.menu-item.is-highlighted{background:#3e5f96}
+.lxy-form-popup .menu-option-actions{position:absolute;right:2px;top:0;display:flex;height:20px}
+.lxy-form-popup .menu-option-action{display:flex;align-items:center;justify-content:center;width:20px;height:20px;padding:0;border:0;border-radius:0;background:transparent;color:#aaa}
+.lxy-form-popup .menu-option-action:hover,.lxy-form-popup .menu-option-action:active,.lxy-form-popup .menu-option-action:focus-visible{background:transparent;color:#eee;outline:none}
+.lxy-form-popup .menu-option-action svg{width:13px;height:13px;display:block;pointer-events:none}
+.lxy-form-popup .menu-item.menu-add{text-align:center;padding:0 4px}
+.lxy-form-popup.lxy-form-menu .menu-option-editor{position:absolute;left:21px;right:24px;top:2px;width:calc(100% - 45px);height:16px!important;font:inherit;line-height:14px;padding:0 2px;border-radius:3px}
+.lxy-form-popup .menu-option-error{margin:0;padding:1px 24px 4px 21px;color:#e5a49c;white-space:normal;overflow-wrap:anywhere;line-height:16px}
+.lxy-form-popup .menu-option-error:empty{display:none}
+.lxy-form-popup .menu-option-row:has(.menu-option-error:not(:empty)){height:auto;min-height:20px}
+.lxy-form-popup .menu-option-editor[aria-invalid=true]{border-color:#ab7771}
+.lxy-form-popup.lxy-form-menu .menu-add-editor{left:4px;right:4px;width:calc(100% - 8px)}
+.lxy-form-popup .menu-add-error{padding-left:4px;padding-right:4px}
 .lxy-form-popup canvas{display:block;touch-action:none;max-width:100%}
 .lxy-form-popup .swatch{min-height:25px;border:1px solid #292929}
 .lxy-form-inline{padding:0;border:0;border-radius:3px;overflow:hidden;box-shadow:inset 0 0 0 var(--input-border,1px) #718b9a;background:#2b2b2b}
 .lxy-form-inline input{position:absolute;left:5px;width:calc(100% - 10px);appearance:none;border:0;border-radius:0;height:20px;min-height:0;max-height:none;padding:0;font:${formFont};line-height:20px;color:#ccc;outline:none!important;box-shadow:none!important;text-indent:0;letter-spacing:normal;background:transparent}
-.lxy-form-inline .error{display:none}.lxy-form-inline:has(input[aria-invalid=true]){box-shadow:inset 0 0 0 var(--input-border,1px) #ab7771}
+.lxy-form-inline textarea{position:absolute;inset:4px;width:calc(100% - 8px);height:calc(100% - 8px);resize:none;border:0;border-radius:0;padding:3px 5px;font:${formFont};line-height:20px;color:#ccc;background:transparent;outline:none!important;box-shadow:none!important;white-space:pre-wrap;overflow:auto}
+.lxy-form-inline .error{display:none}.lxy-form-inline:has(input[aria-invalid=true]),.lxy-form-inline:has(textarea[aria-invalid=true]){box-shadow:inset 0 0 0 var(--input-border,1px) #ab7771}
 `;
 
 function element(tag, parent, props = {}) {
@@ -96,6 +191,7 @@ function popup(owner, anchor, width, inline = false) {
     root.style.left = `${state.inline?rect.left:Math.max(8,Math.min(rect.left,window.innerWidth-w-8))}px`;
     const gap=state.menu?0:4,below = state.inline ? rect.top : rect.top + rect.height + gap;
     root.style.top = `${state.inline?rect.top:Math.max(8,Math.min(below+height>window.innerHeight-8?rect.top-height-gap:below,window.innerHeight-height-8))}px`;
+    if(state.manualPosition){root.style.left=Math.max(0,Math.min(window.innerWidth-w,state.manualPosition.x))+'px';root.style.top=Math.max(0,Math.min(window.innerHeight-29,state.manualPosition.y))+'px';}
     if(state.menu&&root.style.visibility==='hidden'){root.style.visibility='visible';state.onPlaced?.();}
     frame = requestAnimationFrame(place);
   }
@@ -103,11 +199,35 @@ function popup(owner, anchor, width, inline = false) {
   return state;
 }
 
-export function editFormValue(owner, anchor, value, commit, { multiline = false, allowMultiline = false, onTab, label = "值" } = {}) {
-  const p = popup(owner, anchor, 380, !multiline);
+export function editFormValue(owner, anchor, value, commit, { multiline = false, allowMultiline = false, onTab, onMultiline, label = "值", accepts = null, onInput = null } = {}) {
+  const inline = allowMultiline || !multiline;
+  multiline = multiline || (allowMultiline && /[\r\n]/.test(String(value ?? "")));
+  const p = popup(owner, anchor, 380, inline);
   p.root.setAttribute("aria-label", label);
-  let input = element(multiline ? "textarea" : "input", p.root, { value: String(value ?? ""), ariaLabel: label });
-  if(!multiline){
+  let input = element(multiline || allowMultiline ? "textarea" : "input", p.root, { value: String(value ?? ""), ariaLabel: label });
+  // A native scrollbar can be taller than the entire one-line editor at
+  // canvas zoom. Keep caret-driven horizontal scrolling without painting a bar.
+  if(inline){input.style.overflowX="hidden";input.style.overflowY="hidden";}
+  const marks=inline&&allowMultiline?element('div',p.root):null;
+  if(marks){marks.setAttribute('aria-hidden','true');marks.style.cssText='position:absolute;inset:0;pointer-events:none;overflow:hidden';input.wrap='soft';}
+  let acceptedValue=input.value,inlineMultiline=inline&&multiline;
+  const expand=()=>{
+    if(!allowMultiline||inlineMultiline)return;
+    multiline=true;inlineMultiline=true;onMultiline?.();
+    const rect=anchor();if(rect)p.placeInline?.(rect.height,rect.scale??1);
+  };
+  const filterInput=()=>{
+    if(accepts&&!accepts(input.value,acceptedValue)){
+      const position=input.selectionStart??input.value.length;
+      input.value=acceptedValue;input.setSelectionRange?.(Math.min(position,acceptedValue.length),Math.min(position,acceptedValue.length));
+      return;
+    }
+    acceptedValue=input.value;
+    if(/[\r\n]/.test(input.value))expand();
+    onInput?.(input.value);
+  };
+  input.addEventListener("input",filterInput);
+  if(inline){
     const ctx=document.createElement('canvas').getContext?.('2d');
     if(ctx){
       ctx.font=formFont;ctx.textBaseline='alphabetic';
@@ -116,6 +236,17 @@ export function editFormValue(owner, anchor, value, commit, { multiline = false,
       let height=24,lastScale,baseline=0;
       p.placeInline=(h,scale)=>{
         height=h;
+        if(marks){
+          input.style.whiteSpace='pre-wrap';input.style.wordBreak='break-all';input.style.overflowWrap='anywhere';
+          input.style.boxSizing='border-box';input.style.padding=`0 ${14*scale}px 0 0`;
+          const rect=anchor(),width=Math.max(1,(rect?.width??380)/scale-26);
+          const lines=formStringLines(input.value,width,text=>ctx.measureText(text).width);
+          marks.replaceChildren();
+          lines.forEach((line,index)=>{if(line.hardEnd){
+            const mark=element('span',marks,{text:'↵'});
+            mark.style.cssText=`position:absolute;left:${(6+ctx.measureText(line.text).width)*scale}px;top:${2*scale+index*20*scale-(input.scrollTop||0)}px;font:${formFont.replace('14px',`${14*scale}px`)};line-height:${20*scale}px;color:#888`;
+          }});
+        }
         if(lastScale!==scale){
           const font=formFont.replace('14px',`${14*scale}px`),lineHeight=20*scale;
           const probe=element('div',document.body),copy=element('input',probe),marker=element('span',probe);
@@ -127,30 +258,47 @@ export function editFormValue(owner, anchor, value, commit, { multiline = false,
           input.style.left=`${6*scale}px`;input.style.width=`calc(100% - ${12*scale}px)`;
           p.root.style.setProperty('--input-border',`${scale}px`);p.root.style.borderRadius=`${3*scale}px`;
         }
+        if((inlineMultiline||allowMultiline)&&h>24*scale){
+          input.style.overflowY="auto";
+          input.style.font=formFont.replace('14px',`${14*scale}px`);
+          input.style.padding=marks?`0 ${14*scale}px 0 0`:"0";input.style.resize="none";input.style.whiteSpace=marks?"pre-wrap":"pre";
+          input.style.top=`${2*scale}px`;input.style.left=`${6*scale}px`;input.style.width=`calc(100% - ${12*scale}px)`;
+          input.style.height=`calc(100% - ${4*scale}px)`;input.style.lineHeight=`${20*scale}px`;return;
+        }
+        input.style.height=`${20*scale}px`;
+        input.style.overflowY="hidden";
+        if(allowMultiline){input.style.padding=marks?`0 ${14*scale}px 0 0`:"0";input.style.resize="none";input.style.whiteSpace=marks?"pre-wrap":"pre";}
         input.style.top=`${h/2+formTextLayout(ctx,input.value).baseline*scale-baseline}px`;
       };
       input.addEventListener('input',()=>p.placeInline(height,lastScale??1));
     }
   }
   if(allowMultiline&&!multiline)input.title="Shift+Enter 展开多行编辑";
-  if (multiline) { input.rows = 7; input.style.resize = "vertical"; }
+  if (multiline&&!inline) { input.rows = 7; input.style.resize = "vertical"; }
   const error = element("div", p.root, { className: "error" });
   function save() {
+    if(accepts&&!accepts(input.value,acceptedValue,true)){
+      error.textContent="输入尚未达到字段格式要求";input.setAttribute("aria-invalid","true");input.title=error.textContent;return false;
+    }
     try { if (commit(input.value) === false) throw new Error("请检查输入值"); p.close(); return true; }
     catch (e) { error.textContent = e.message; input.setAttribute("aria-invalid", "true"); return false; }
   }
   p.outside = save;
   const addApply=()=>{const footer=element("div",p.root,{className:"footer"});element("button",footer,{text:"应用",onclick:save});};
   function onKey(event) {
-    if(event.key==="Enter"&&event.shiftKey&&!multiline&&allowMultiline){
-      event.preventDefault();multiline=true;p.inline=false;p.root.classList.remove("lxy-form-inline");
-      const text=input.value;input.remove();input=element("textarea",null,{value:text,rows:7,ariaLabel:label});p.root.replaceChildren(input,error);input.addEventListener("keydown",onKey);addApply();input.focus({preventScroll:true});return;
+    if(event.isComposing)return;
+    if(event.key==="Enter"&&event.shiftKey&&allowMultiline){
+      event.preventDefault();
+      const start=input.selectionStart??input.value.length,end=input.selectionEnd??start;
+      const candidate=input.value.slice(0,start)+'\n'+input.value.slice(end);
+      if(accepts&&!accepts(candidate,acceptedValue))return;
+      input.value=candidate;input.setSelectionRange?.(start+1,start+1);filterInput();return;
     }
     if (event.key === "Enter" && (!multiline || event.ctrlKey || event.metaKey)) { event.preventDefault(); save(); }
     if (event.key === "Tab") { event.preventDefault(); if (save()) onTab?.(event.shiftKey ? -1 : 1); }
   }
   input.addEventListener("keydown",onKey);
-  if (multiline) addApply();
+  if (multiline&&!inline) addApply();
   input.focus({ preventScroll: true }); input.select();
   return p;
 }
@@ -161,15 +309,64 @@ export function formMenu(owner, anchor, choices, choose) {
   p.root.style.visibility='hidden';
   p.root.classList.add("lxy-form-menu");
   p.root.setAttribute("role", "listbox");
+  p.outside=()=>{if(!p.finishEdit||p.finishEdit(true))p.close();};
+  p.root.addEventListener('pointerdown',event=>{
+    if(p.finishEdit&&event.target!==p.editInput&&!p.finishEdit(true)){event.preventDefault();event.stopImmediatePropagation();}
+  },true);
   const highlight=button=>buttons.forEach(item=>{item.classList.remove('is-highlighted');if(item===button&&!item.disabled)item.classList.add('is-highlighted');});
-  const buttons=choices.map((choice, i) => {
-    const button=element("button", p.root, {
-      className: "menu-item", text: choice.label, title:choice.label, disabled: choice.disabled === true,
-      onclick: () => { p.close(); choose(choice.value, i); },
+  let buttons=[];
+  function render(){
+  p.root.replaceChildren();
+  buttons=choices.map((choice, i) => {
+    const parent=choice.actions?.length||choice.create?element('div',p.root,{className:'menu-option-row'}):p.root;
+    const button=element("button", parent, {
+      className: choice.centered?"menu-item menu-add":"menu-item", text: choice.label, title:choice.label, disabled: choice.disabled === true,
+      onclick: () => { if(p.finishEdit&&!p.finishEdit(true))return;if(choice.create){startEdit(button,'',text=>{const added=choice.create(text);choices.splice(choices.indexOf(choice),0,added);},true);return;}p.close(); if(choice.action)choice.action();else choose(choice.value, i); },
     });
     button.addEventListener('pointermove',()=>highlight(button));
-    button.setAttribute("role","option");button.setAttribute("aria-selected",String(choice.selected===true));return button;
+    button.setAttribute("role",choice.action||choice.create?"menuitem":"option");
+    if(!choice.action&&!choice.create)button.setAttribute("aria-selected",String(choice.selected===true));
+    function startEdit(control,value,saveValue,rebuild=false){
+      const input=element('input',parent,{className:choice.create?'menu-option-editor menu-add-editor':'menu-option-editor',value});
+      const error=element('div',parent,{className:choice.create?'menu-option-error menu-add-error':'menu-option-error'});error.setAttribute('role','alert');
+      control.style.visibility='hidden';button.style.visibility='hidden';
+      input.setAttribute('aria-label',choice.create?'新增选项':`修改：${choice.label}`);
+      let finished=false;
+      const finish=save=>{
+        if(finished)return true;
+        if(save){try{saveValue(input.value);}catch(e){error.textContent=e.message;input.title=e.message;input.setAttribute('aria-invalid','true');return false;}}
+        finished=true;p.finishEdit=null;p.editInput=null;input.remove();error.remove();control.style.visibility='';button.style.visibility='';
+        if(save&&rebuild)render();return true;
+      };
+      p.finishEdit=finish;p.editInput=input;
+      input.addEventListener('input',()=>{error.textContent='';input.title='';input.setAttribute('aria-invalid','false');});
+      input.addEventListener('keydown',event=>{event.stopPropagation();if(event.key==='Enter'||event.key==='Escape'){event.preventDefault();if(finish(event.key==='Enter'))(rebuild?buttons.at(-1):control)?.focus();}});
+      input.addEventListener('blur',()=>finish(true));input.focus();input.select();
+    }
+    if(choice.actions?.length){
+      const actions=element('div',parent,{className:'menu-option-actions'});
+      for(const action of choice.actions){
+        const control=element('button',actions,{className:'menu-option-action',title:action.label,onclick:event=>{
+          event.stopPropagation();highlight(null);
+          if(p.finishEdit&&!p.finishEdit(true))return;
+          if(!action.edit){p.close();action.run(choice.value);return;}
+          if(parent.querySelector('input')){parent.querySelector('input').focus();return;}
+          startEdit(control,choice.value,text=>{
+              const next=action.edit(text,choice.value);choice.value=choice.label=next;button.textContent=button.title=next;
+              actions.querySelectorAll('button').forEach(b=>b.setAttribute('aria-label',`${b.title}：${next}`));
+          });
+        }});
+        control.addEventListener('pointermove',()=>highlight(null));
+        control.addEventListener('pointerenter',()=>highlight(null));
+        control.setAttribute('aria-label',`${action.label}：${choice.label}`);
+        const path=action.icon==='edit'?'M9 3l4 4M3 9l7-7 4 4-7 7-5 1z':'M2 4h12M6 4V2h4v2M4 4l1 10h6l1-10M7 7v4M9 7v4';
+        control.innerHTML=`<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="${path}"/></svg>`;
+      }
+    }
+    return button;
   });
+  }
+  render();
   p.root.addEventListener('pointerleave',()=>highlight(null));
   p.highlightAt=event=>{
     const button=document.elementFromPoint?.(event.clientX,event.clientY)?.closest?.('.menu-item');
@@ -283,47 +480,7 @@ export function hsvRGB(h,s,v) {
   const f=n=>{const k=(n+h*6)%6;return Math.round((v-v*s*Math.max(0,Math.min(k,4-k,1)))*255);};return [f(5),f(3),f(1)];
 }
 
-const recentColors=[];
 export function pickFormColor(owner,anchor,value,digits,commit) {
-  const p=popup(owner,anchor,350);p.root.setAttribute("aria-label","选择颜色");
-  let rgba;try{rgba=colorRGBA(value);}catch{rgba=[0,0,0,255];}
-  let [h,s,v]=rgbHSV(rgba);
-  const error=element("div",null,{className:"error"});
-  const square=element("canvas",p.root,{width:324,height:165,ariaLabel:"饱和度和明度"});
-  const hueLabel=element("label",p.root,{text:"色相"});
-  const hue=element("input",hueLabel,{type:"range",min:"0",max:"360",step:"0.1",value:h*360,ariaLabel:"色相"});
-  let alpha;
-  if(digits===8){const label=element("label",p.root,{text:"透明度"});alpha=element("input",label,{type:"range",min:"0",max:"255",value:rgba[3],ariaLabel:"透明度"});}
-  const previews=element("div",p.root,{className:"row"});
-  const old=element("div",previews,{text:"原色",className:"swatch"}),fresh=element("div",previews,{text:"新色",className:"swatch"});
-  const checker="repeating-conic-gradient(#666 0% 25%,#999 0% 50%) 0 / 12px 12px";
-  old.style.background=`linear-gradient(${colorHex(rgba,8)},${colorHex(rgba,8)}),${checker}`;
-  const hex=element("input",p.root,{value:colorHex(rgba,digits),ariaLabel:"HEX"});
-  const row=element("div",p.root,{className:"row"}),channels=[];
-  for(let i=0;i<(digits===8?4:3);i++){
-    const label=element("label",row,{text:"RGBA"[i]});
-    const input=element("input",label,{type:"number",min:"0",max:"255",step:"1",value:rgba[i],ariaLabel:"RGBA"[i]});channels.push(input);
-    input.oninput=()=>{if(input.value===""||!Number.isInteger(Number(input.value))||Number(input.value)<0||Number(input.value)>255){error.textContent="颜色通道必须为 0–255 整数";return;}rgba[i]=Number(input.value);[h,s,v]=rgbHSV(rgba);sync();};
-  }
-  function sync(){
-    error.textContent="";hex.value=colorHex(rgba,digits);channels.forEach((el,i)=>el.value=rgba[i]);hue.value=h*360;if(alpha)alpha.value=rgba[3];
-    fresh.style.background=`linear-gradient(${colorHex(rgba,8)},${colorHex(rgba,8)}),${checker}`;
-    const ctx=square.getContext("2d");ctx.fillStyle=`hsl(${h*360} 100% 50%)`;ctx.fillRect(0,0,324,165);
-    let g=ctx.createLinearGradient(0,0,324,0);g.addColorStop(0,"white");g.addColorStop(1,"#fff0");ctx.fillStyle=g;ctx.fillRect(0,0,324,165);
-    g=ctx.createLinearGradient(0,0,0,165);g.addColorStop(0,"#0000");g.addColorStop(1,"black");ctx.fillStyle=g;ctx.fillRect(0,0,324,165);
-    ctx.beginPath();ctx.arc(s*324,(1-v)*165,5,0,Math.PI*2);ctx.strokeStyle="white";ctx.lineWidth=2;ctx.stroke();
-  }
-  hex.oninput=()=>{try{if(hex.value.length!==digits+1)throw new Error(`请输入 ${digits} 位 HEX`);rgba=colorRGBA(hex.value);[h,s,v]=rgbHSV(rgba);sync();}catch(e){error.textContent=e.message;}};
-  hue.oninput=()=>{h=Number(hue.value)/360;rgba=[...hsvRGB(h,s,v),rgba[3]];sync();};
-  if(alpha)alpha.oninput=()=>{rgba[3]=Number(alpha.value);sync();};
-  const move=event=>{const rect=square.getBoundingClientRect();s=Math.max(0,Math.min(1,(event.clientX-rect.left)/rect.width));v=1-Math.max(0,Math.min(1,(event.clientY-rect.top)/rect.height));rgba=[...hsvRGB(h,s,v),rgba[3]];sync();};
-  square.onpointerdown=event=>{square.setPointerCapture(event.pointerId);move(event);};square.onpointermove=event=>{if(square.hasPointerCapture(event.pointerId))move(event);};
-  square.onpointerup=event=>{if(square.hasPointerCapture(event.pointerId))square.releasePointerCapture(event.pointerId);};
-  if(typeof window.EyeDropper==="function")element("button",p.root,{text:"吸管",onclick:async()=>{try{const result=await new window.EyeDropper().open();if(owner.popup!==p)return;rgba=[...colorRGBA(result.sRGBHex).slice(0,3),rgba[3]];[h,s,v]=rgbHSV(rgba);sync();}catch(e){if(e.name!=="AbortError")error.textContent=e.message;}}});
-  const recent=element("div",p.root,{className:"row"});
-  for(const color of recentColors) {const button=element("button",recent,{text:" ",title:color,onclick:()=>{rgba=colorRGBA(color);[h,s,v]=rgbHSV(rgba);sync();}});button.style.background=color;}
-  p.root.append(error);const footer=element("div",p.root,{className:"footer"});
-  element("button",footer,{text:"取消",onclick:p.close});element("button",footer,{text:"应用",onclick:()=>{
-    if(error.textContent)return;const next=colorHex(rgba,digits);const index=recentColors.indexOf(next);if(index>=0)recentColors.splice(index,1);recentColors.unshift(next);recentColors.length=Math.min(8,recentColors.length);commit(next);p.close();
-  }});sync();
+  return photoshopPicker(owner,anchor,value,digits,commit,{popup,element,colorRGBA,colorHex,rgbHSV,hsvRGB,
+    fetchBooks:async book=>{const response=await api.fetchApi('/liuxinyu/template_form/color_books'+(book?'?book='+encodeURIComponent(book):''));const result=await response.json();if(!response.ok)throw new Error(result.error||'读取色库失败');return result;}});
 }

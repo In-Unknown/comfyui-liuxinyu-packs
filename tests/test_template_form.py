@@ -4,6 +4,7 @@ import asyncio
 import json
 from pathlib import Path
 import sys
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -19,6 +20,236 @@ from comfy_execution.utils import CurrentNodeContext
 
 
 class FormTests(unittest.TestCase):
+    def test_image_modes_keep_original_path_or_copy_explicitly(self):
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "photo.png"
+            Image.new("RGB", (2, 2), "red").save(source)
+            with patch.object(form.folder_paths, "get_input_directory", return_value=str(root / "input")):
+                self.assertEqual(form.encode_form_image(source, "link"), str(source.resolve()))
+                self.assertTrue(form.encode_form_image(source, "auto").startswith("data:image/png;base64,"))
+                copied = form.encode_form_image(source, "copy")
+                self.assertTrue((root / "input" / copied).is_file())
+                large = root / "large.bmp"
+                Image.new("RGB", (500, 500), "red").save(large)
+                self.assertEqual(form.encode_form_image(large, "auto"), str(large.resolve()))
+                (root / "bad.png").write_text("not an image", encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    form.encode_form_image(root / "bad.png", "link")
+
+    def test_image_thumbnail_uses_small_preview_for_input_path(self):
+        from io import BytesIO
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "photo.png"
+            Image.new("RGB", (1200, 900), "red").save(source)
+            with patch.object(form.folder_paths, "get_input_directory", return_value=str(root)):
+                preview = Image.open(BytesIO(form.form_image_thumbnail("photo.png")))
+                self.assertLessEqual(max(preview.size), 320)
+                self.assertEqual(preview.format, "WEBP")
+                with self.assertRaises(ValueError):
+                    form.form_image_thumbnail("../outside.png")
+
+    def test_config_values_parse_binding_and_metadata(self):
+        schema = {'type': 'object', 'properties': {'n': {'type': 'integer'}}}
+        self.assertEqual(form.parse_form_values('{"n":3}', schema)['value'], {'n': 3})
+        payload = {'$format': 'liuxinyu.template-values/v1', 'schema': schema, 'value': {'n': 4}, 'field_required': {'$/n': False}}
+        result = form.parse_form_values(json.dumps(payload), schema)
+        self.assertEqual(result['field_required'], {'$/n': False})
+        self.assertEqual(result['value'], {'n': 4})
+        with self.assertRaises(ValueError): form.parse_form_values(payload, {'type': 'array'})
+        with self.assertRaises(ValueError): form.parse_form_values('not json', schema)
+        # Invalid source values remain available to the user for correction.
+        self.assertEqual(form.parse_form_values('{"n":"wrong"}', schema)['value'], {'n': 'wrong'})
+
+    def test_input_mode_validation_properties_do_not_lock_dynamic_names(self):
+        schema = {"type": "object", "properties": {"keys": {"type": "object", "properties": {"fixed": {"type": "string"}}, "additionalProperties": True}}}
+        value = {"keys": {"1": "A", "fixed": "A"}}
+        for mode in ("enum", "image", "file", "date", "color"):
+            effective = form.materialize_required_properties(schema, value, {"$/keys/1": mode, "$/keys/fixed": mode}, field_enums={"$/keys/1": ["A"], "$/keys/fixed": ["A"]})
+            view = form.context_for(effective).presentation(effective, value)
+            self.assertEqual(view["properties"]["keys"]["x-editableKeys"], ["1"])
+
+    def test_editable_enum_options_validate_source_projection_and_reuse(self):
+        schema={"type":"object","properties":{"keys":{"type":"object"},"rows":{"type":"array","items":{"type":"object","x-requiredPropertiesFrom":{"pointer":"/keys","propertySchema":True}}}}}
+        value={"keys":{"style":"A"},"rows":[{"style":"B"}]}
+        modes={"$/keys/style":"enum"};options={"$/keys/style":["A","B"]}
+        self.assertEqual(form.validate_value(schema,value,modes,field_enums=options)[1],[])
+        self.assertTrue(form.reusable({"schema":schema,"value":value,"input_types":modes,"field_enums":options,"confirmed":True},schema))
+        value['rows'][0]['style']='C'
+        self.assertTrue(form.validate_value(schema,value,modes,field_enums=options)[1])
+        self.assertTrue(form.validate_value(schema,value,modes,field_enums={})[1])
+        with self.assertRaises(ValueError): form.validate_value(schema,value,modes,field_enums={'$/keys/style':['A','A']})
+
+    def test_projected_required_flag_is_saved_separately_and_validated(self):
+        schema={"type":"object","properties":{"keys":{"type":"object"},"rows":{"type":"array","items":{"type":"object","x-requiredPropertiesFrom":{"pointer":"/keys","propertySchema":{"type":"string"}}}}}}
+        value={"keys":{"name":"example"},"rows":[{}]}
+        self.assertTrue(form.validate_value(schema,value)[1])
+        flags={"$/keys/name":False}
+        self.assertEqual(form.validate_value(schema,value,field_required=flags)[1],[])
+        self.assertTrue(form.reusable({"schema":schema,"value":value,"confirmed":True,"field_required":flags},schema))
+        effective=form.materialize_required_properties(schema,value,field_required=flags)
+        self.assertNotIn("name",effective["properties"]["rows"]["items"]["required"])
+
+    def test_recursive_projection_requires_nested_keys_and_keeps_defaults(self):
+        schema = form.parse_schema({"type": "object", "properties": {
+            "keys": {"type": "object"}, "rows": {"type": "array", "items": {
+                "type": "object", "x-requiredPropertiesFrom": {"pointer": "/keys", "propertySchema": True}}}}})
+        value = {"keys": {"nested": {"photo": "pic.png", "deeper": {"count": 3}}},
+                 "rows": [{"nested": {"photo": "other.png", "deeper": {"count": 4}}}]}
+        effective = form.materialize_required_properties(schema, value, {"/keys/nested/photo": "image"})
+        nested = effective["properties"]["rows"]["items"]["properties"]["nested"]
+        self.assertEqual(nested["x-requiredPropertiesFrom"]["pointer"], "/keys/nested")
+        self.assertIn("photo", nested["required"])
+        self.assertFalse(nested["additionalProperties"])
+        self.assertEqual(nested["properties"]["photo"]["default"], "pic.png")
+        self.assertIn("x-image", nested["properties"]["photo"])
+        self.assertEqual(form.validate_value(schema, value)[1], [])
+        del value["rows"][0]["nested"]["deeper"]["count"]
+        self.assertTrue(form.validate_value(schema, value)[1])
+
+    def test_ordered_properties_and_editable_key_presentation(self):
+        schema = form.parse_schema({"type": "object", "properties": {
+            "min": {"type": "integer"}, "max": {"type": "integer"}},
+            "x-orderedProperties": [["min", "max"]], "propertyNames": {"minLength": 2}})
+        self.assertEqual(form.validate_value(schema, {"min": 2, "max": 2})[1], [])
+        errors = form.validate_value(schema, {"min": 3, "max": 2})[1]
+        self.assertEqual(errors[0]["path"], "/max")
+        self.assertIn("不得大于", errors[0]["message"])
+        view = form.context_for(schema).presentation(schema, {"min": 1, "max": 2, "dynamic": 3})
+        self.assertEqual(view["x-editableKeys"], ["dynamic"])
+        self.assertEqual(view["propertyNames"], {"minLength": 2})
+
+    def test_dynamic_required_properties_are_presented_and_validated(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "区分键": {"type": "object", "additionalProperties": True},
+                "SKU列表": {"type": "array", "items": {
+                    "type": "object", "properties": {}, "required": [], "additionalProperties": False,
+                    "x-requiredPropertiesFrom": {
+                        "pointer": "/区分键",
+                        "propertySchemaByType": {
+                            "string": {"type": "string", "minLength": 1, "pattern": "\\S"},
+                            "integer": {"type": "integer"},
+                        },
+                    },
+                }},
+            },
+            "required": ["区分键", "SKU列表"],
+        }
+        parsed = form.parse_schema(schema)
+        value = {"区分键": {"颜色": "默认色", "数量": 2432}, "SKU列表": [{"颜色": "红色", "数量": 2}]}
+        effective = form.materialize_required_properties(parsed, value)
+        item_schema = effective["properties"]["SKU列表"]["items"]
+        self.assertEqual(item_schema["required"], ["颜色", "数量"])
+        self.assertEqual({key: rule["type"] for key, rule in item_schema["properties"].items()},
+                         {"颜色": "string", "数量": "integer"})
+        self.assertEqual({key: rule["default"] for key, rule in item_schema["properties"].items()},
+                         {"颜色": "默认色", "数量": 2432})
+        view = form.context_for(effective).presentation(effective, value)
+        row_view = view["properties"]["SKU列表"]["prefixItems"][0]
+        self.assertEqual(set(row_view["properties"]), {"颜色", "数量"})
+        self.assertEqual(set(row_view["required"]), {"颜色", "数量"})
+        self.assertIn("x-requiredPropertiesFrom", row_view)
+        self.assertEqual(form.validate_value(parsed, value)[1], [])
+
+        missing = {"区分键": {"颜色": "默认色", "数量": 2432}, "SKU列表": [{"颜色": "红色"}]}
+        self.assertTrue(form.validate_value(parsed, missing)[1])
+        blank = {"区分键": {"颜色": "默认色", "数量": 2432}, "SKU列表": [{"颜色": "  ", "数量": 2}]}
+        self.assertTrue(form.validate_value(parsed, blank)[1])
+        wrong_type = {"区分键": {"颜色": "默认色", "数量": 2432}, "SKU列表": [{"颜色": "红色", "数量": "2"}]}
+        self.assertTrue(form.validate_value(parsed, wrong_type)[1])
+
+    def test_dynamic_string_input_modes_project_to_sku_schema_and_validate(self):
+        schema = form.parse_schema({"type": "object", "properties": {
+            "区分键": {"type": "object", "additionalProperties": True},
+            "SKU列表": {"type": "array", "items": {"type": "object", "properties": {},
+                "required": [], "additionalProperties": False,
+                "x-requiredPropertiesFrom": {"pointer": "/区分键", "propertySchema": True}}}},
+            "required": ["区分键", "SKU列表"]})
+        value = {"区分键": {"主图": ""}, "SKU列表": [{"主图": ""}]}
+        modes = {"/区分键/主图": "image"}
+        projected = form.materialize_required_properties(schema, value, modes)
+        item_schema = projected["properties"]["SKU列表"]["items"]["properties"]["主图"]
+        self.assertEqual(item_schema["type"], "string")
+        self.assertIn("x-image", item_schema)
+        self.assertEqual(item_schema["default"], "")
+        date_modes = {"/区分键/主图": "date"}
+        date_value = {"区分键": {"主图": "2026-11-20"}, "SKU列表": [{"主图": "2026-11-20"}]}
+        date_schema = form.materialize_required_properties(schema, date_value, date_modes)
+        date_item = date_schema["properties"]["SKU列表"]["items"]["properties"]["主图"]
+        self.assertEqual(date_item["format"], "date")
+        self.assertEqual(form.validate_value(schema, date_value, date_modes)[1], [])
+        invalid = {"区分键": {"主图": "2026-02-30"}, "SKU列表": [{"主图": "2026-02-30"}]}
+        self.assertTrue(form.validate_value(schema, invalid, date_modes)[1])
+        saved = {"schema": schema, "value": invalid, "input_types": date_modes, "confirmed": True}
+        self.assertFalse(form.reusable(saved, schema))
+        for mode, valid, bad in [("time", "12:30:59", "25:30"),
+                                 ("date-time", "2026-11-20T12:30:00", "2026-02-30T12:00:00"),
+                                 ("color", "#ABCDEF", "red")]:
+            chosen = {"$/区分键/主图": mode}
+            good = {"区分键": {"主图": valid}, "SKU列表": [{"主图": valid}]}
+            wrong = {"区分键": {"主图": bad}, "SKU列表": [{"主图": bad}]}
+            self.assertEqual(form.validate_value(schema, good, chosen)[1], [])
+            self.assertEqual({e["path"] for e in form.validate_value(schema, wrong, chosen)[1]},
+                             {"/区分键/主图", "/SKU列表/0/主图"})
+        # Existing template constraints survive the added input format.
+        schema["properties"]["SKU列表"]["items"]["x-requiredPropertiesFrom"]["propertySchema"] = {
+            "type": "string", "pattern": "^red$"}
+        self.assertTrue(form.validate_value(schema, date_value, date_modes)[1])
+
+    def test_dynamic_property_rule_rejects_invalid_pointer_definition(self):
+        schema = {"type": "array", "items": {"type": "object", "x-requiredPropertiesFrom": {"pointer": "keys"}}}
+        with self.assertRaisesRegex(ValueError, "x-requiredPropertiesFrom"):
+            form.parse_schema(schema)
+
+    def test_system_file_picker_stays_topmost_without_selection_timeout(self):
+        with patch.object(form.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout='', stderr='')) as run:
+            self.assertIsNone(form.system_form_file('choose'))
+            script = run.call_args.args[0][-1]
+            self.assertIn('$owner.TopMost = $true', script)
+            self.assertIn('$dialog.ShowDialog($owner)', script)
+            self.assertIn('$owner.Dispose()', script)
+            self.assertIsNone(run.call_args.kwargs['timeout'])
+        with patch.object(form.subprocess, 'run', side_effect=form.subprocess.TimeoutExpired('powershell', 15)):
+            with self.assertRaisesRegex(ValueError, '15 秒'):
+                form.system_form_file('clipboard')
+
+    def test_file_encoding_boundary_and_real_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.bin"
+            path.write_bytes(b"a" * (512 * 1024 - 1))
+            result = form.encode_form_file(path)
+            self.assertEqual(result["encoding"], "base64")
+            self.assertEqual(result["display"], str(path.resolve()))
+            self.assertEqual(form.base64.b64decode(result["value"]), path.read_bytes())
+            path.write_bytes(b"b" * (512 * 1024))
+            self.assertEqual(form.encode_form_file(path)["value"], str(path.resolve()))
+            self.assertEqual(form.encode_form_file(path, "base64")["encoding"], "base64")
+            path.write_bytes(b"")
+            self.assertEqual(form.encode_form_file(path)["value"], "")
+            self.assertEqual(form.encode_form_file(path, "link")["encoding"], "link")
+            form.SELECTED_FORM_FILES.discard(path.resolve())
+        schema = {"type": "string", "x-file": {}}
+        self.assertEqual(form.context_for(schema).presentation(schema, "")["x-file"], {})
+
+    def test_image_annotations_survive_presentation_without_becoming_fields(self):
+        image = {'type': 'string', 'x-image': {'source': 'base64'},
+                 'contentMediaType': 'image/png', 'contentEncoding': 'base64'}
+        schema = {'type': 'object', '$defs': {'image': image},
+                  'properties': {'photo': {'$ref': '#/$defs/image'}},
+                  'required': ['photo'], 'additionalProperties': False}
+        value = {'photo': 'YWJj'}
+        view = form.context_for(schema).presentation(schema, value)
+        for key in ('x-image', 'contentMediaType', 'contentEncoding'):
+            self.assertEqual(view['properties']['photo'][key], image[key])
+        _, errors = form.validate_value(schema, value)
+        self.assertEqual(errors, [])
+        self.assertEqual(list(value), ['photo'])
+
     def test_inline_display_names_preserve_card_message_and_machine_paths(self):
         member = {'type': 'object', 'properties': {'make': {
             'type': 'string', 'enum': ['skip', 'make'], 'title': 'Make this time'}}, 'required': ['make']}
@@ -391,6 +622,48 @@ class FormTests(unittest.TestCase):
 
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_import_wins_over_confirmed_draft_and_validates_without_wait(self):
+        schema = {'type': 'integer', 'minimum': 1}
+        state = json.dumps({'schema': schema, 'value': 9, 'confirmed': True})
+        with self.assertRaises(ValueError):await self.node.execute(schema,state,values_json='0')
+        self.assertEqual((await self.node.execute(schema,state,values_json='2')).result,(2,))
+        self.assertFalse(form.PENDING)
+
+    async def test_file_source_sync_preserves_wrapper_and_rejects_external_changes(self):
+        schema={'type':'integer','minimum':1}
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'source.json'
+            path.write_text(json.dumps({'$format':'liuxinyu.template-values/v1','schema':schema,'value':3}),encoding='utf-8')
+            source=form.read_values_source(schema,sync_file=str(path))
+            form.write_synced_values({'sync_token':source['sync_token'],'value':4})
+            self.assertEqual(json.loads(path.read_text())['value'],4)
+            self.assertEqual((await self.node.execute(schema,sync_file=str(path))).result,(4,))
+            path.write_text('5')
+            with self.assertRaises(ValueError):form.write_synced_values({'sync_token':source['sync_token'],'value':6})
+            self.assertEqual(path.read_text(),'5')
+            with self.assertRaises(ValueError):form.read_values_source(schema,'3',str(path))
+            plain=form.read_values_source(schema,sync_file=str(path))
+            form.write_synced_values({'sync_token':plain['sync_token'],'value':7})
+            self.assertEqual(json.loads(path.read_text()),7)
+
+    async def test_save_values_dialog_write_and_cancel(self):
+        class Request:
+            content_type = 'application/json'
+            async def json(self):
+                return {'schema': {'type': 'object'}, 'value': {'name': '中文\n资料'}, 'input_types': {'$/name': 'string'}}
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / '配置.json')
+            with patch.object(form, 'system_form_file', return_value=path) as dialog:
+                response = await form.save_form_values(Request())
+            self.assertEqual(response.status, 200)
+            dialog.assert_called_once_with('save-values')
+            saved = json.loads(Path(path).read_text(encoding='utf-8'))
+            self.assertEqual(saved['value'], {'name': '中文\n资料'})
+            self.assertEqual(form.parse_form_values(saved, saved['schema'])['input_types'], {'$/name': 'string'})
+            with patch.object(form, 'system_form_file', return_value=None):
+                response = await form.save_form_values(Request())
+            self.assertEqual(json.loads(response.body), {'cancelled': True})
+
     async def asyncSetUp(self):
         self.events = []
         self.server = SimpleNamespace(client_id='test-client', send_sync=lambda *args: self.events.append(args))

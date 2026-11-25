@@ -13,6 +13,8 @@ export async function queueTemplateRefresh(node){
   // Change only the execution snapshot. The user's graph and saved workflow
   // keep the real form node, its state and every existing connection.
   prompt.output[target]={class_type:'LiuxinyuTemplateSchemaCache',inputs:{schema:source.inputs.schema},_meta:source._meta};
+  if(source.inputs.values_json!==undefined)prompt.output[target].inputs.values_json=source.inputs.values_json;
+  if(source.inputs.sync_file!==undefined)prompt.output[target].inputs.sync_file=source.inputs.sync_file;
   const response=await api.queuePrompt(0,prompt,{partialExecutionTargets:[target]});
   if(!response.prompt_id)throw new Error('模板更新任务未成功入队，请检查上游节点连接。');
   return {prompt_id:response.prompt_id,target,workflow_id:String(root.id||'')};
@@ -49,7 +51,9 @@ export function waitTemplateRefresh(job,{isCurrent=()=>true,onStatus=()=>{}}={})
           if(result.status?.status_str!=='success')throw new Error(failure?`上游节点 ${failure[1].node_id}：${failure[1].exception_message}`:'模板更新任务被中断，原模板未替换。');
           const schemas=result.outputs?.[job.target]?.lxy_template_schema;
           if(!Array.isArray(schemas)||schemas.length!==1)throw new Error('Schema 输入链未返回唯一模板；请将多个结果整理为一个 Schema 后重试。');
-          finish(null,schemas[0]);return;
+          const values=result.outputs?.[job.target]?.lxy_template_values;
+          if(values!==undefined&&(!Array.isArray(values)||values.length!==1))throw Error('填写值输入链必须返回唯一 JSON。');
+          finish(null,values?{imported:true,schema:schemas[0],...values[0]}:schemas[0]);return;
         }
       }catch(error){finish(error);return;}
       finally{checking=false;}

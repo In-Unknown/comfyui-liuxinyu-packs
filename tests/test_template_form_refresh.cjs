@@ -13,6 +13,14 @@ function harness(){
   return Object.assign(h,{context});
 }
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
+test('refresh includes the optional values chain and returns its imported payload',async()=>{
+  const h=harness();h.original.output['10:4'].inputs.values_json=['8',0];
+  await h.context.queueTemplateRefresh(h.node);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.queued[0][1].output['10:4'].inputs.values_json)),['8',0]);
+  h.history={p:{status:{status_str:'success'},outputs:{'10:4':{lxy_template_schema:[{type:'object'}],lxy_template_values:[{value:{name:'imported'}}]}}}};
+  const result=await h.context.waitTemplateRefresh({prompt_id:'p',target:'10:4'});
+  assert.equal(result.imported,true);assert.equal(result.value.name,'imported');
+});
 test('nested target uses only linked Schema input and leaves live serialized source unchanged',async()=>{
   const h=harness(),job=await h.context.queueTemplateRefresh(h.node),call=h.queued[0];
   assert.equal(job.target,'10:4');assert.equal(call[1].output['10:4'].class_type,'LiuxinyuTemplateSchemaCache');
