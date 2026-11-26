@@ -1013,7 +1013,8 @@ export class NativeTemplateForm {
     const job=this.imageJobs.get(row.path);
     const text=job==='choose'?'等待选文件…':job?'读取文件中…':info?.display||row.value||'选择文件';
     this.valueBox(ctx,row,input,text,()=>this.chooseFile(row),'file','click');
-    const target=this.targets[this.targets.length-1];target.hint=job==='choose'?'请在置顶的系统文件选择框中选择或取消；等待不限时':text;
+    const target=this.targets[this.targets.length-1];
+    if(target)target.hint=job==='choose'?'请在置顶的系统文件选择框中选择或取消；等待不限时':text;
   }
   chooseFile(row){
     this.imageFocus=row.path;this.activeList=null;closeFormPopup(this);

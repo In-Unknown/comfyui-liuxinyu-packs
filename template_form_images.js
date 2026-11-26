@@ -44,9 +44,8 @@ export function imagePreviewURL(schema,value) {
   const index=path.lastIndexOf('/');
   return api.apiURL(`/view?${new URLSearchParams({filename:path.slice(index+1),subfolder:index<0?'':path.slice(0,index),type:'input'})}`);
 }
-export function imageThumbnailURL(schema,value) {
-  if(imageValueSource(schema,value)!=='path')return imagePreviewURL(schema,value);
-  return api.apiURL('/liuxinyu/template_form/image/thumbnail?path='+encodeURIComponent(value));
+export function imageThumbnailURL(schema, value) {
+  return imagePreviewURL(schema, value);
 }
 export async function imageReferenceFile(schema,value) {
   const response=await fetch(imagePreviewURL(schema,value));
